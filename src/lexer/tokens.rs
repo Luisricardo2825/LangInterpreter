@@ -42,7 +42,7 @@ pub enum Token {
     Identifier(String),
 
     // Literais
-    #[regex(r"-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?", |lex| lex.slice().parse::<f64>().unwrap())]
+    #[regex(r"-?(?:0|[1-9](?:_?\d)*)(?:\.\d(?:_?\d)*)?(?:[eE][+-]?\d(?:_?\d)*)?", |lex| lex.slice().replace('_', "").parse::<f64>().unwrap())]
     Number(f64),
 
     #[token("false", |_| false)]

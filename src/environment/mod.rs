@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, io::Write};
 
 use crate::ast::ast::Stmt;
 
@@ -81,9 +81,11 @@ fn global() -> HashMap<String, Value> {
     env.insert(
         "print".to_string(),
         Value::Builtin(|args: Vec<Value>| {
+            let mut s = String::new();
             for arg in args {
-                print!("{}", arg.to_string());
+                s += &arg.to_string();
             }
+            print!("{}", s);
             Value::Void
         }),
     );
@@ -91,9 +93,12 @@ fn global() -> HashMap<String, Value> {
     env.insert(
         "println".to_string(),
         Value::Builtin(|args: Vec<Value>| {
+            // Concat all args and print
+            let mut s = String::new();
             for arg in args {
-                println!("{}", arg.to_string());
+                s += &arg.to_string();
             }
+            println!("{}", s);
             Value::Void
         }),
     );
@@ -119,13 +124,65 @@ fn global() -> HashMap<String, Value> {
             _ => Value::Null,
         }),
     );
+
+    // input
+    env.insert(
+        "input".to_string(),
+        Value::Builtin(|args: Vec<Value>| match &args[..] {
+            [Value::String(msg)] => {
+                print!("{}", msg);
+                std::io::stdout().flush().unwrap();
+
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input).unwrap();
+                Value::String(input.trim().to_string())
+            }
+            _ => Value::Null,
+        }),
+    );
+
+    env.insert(
+        "range".to_string(),
+        Value::Builtin(|args: Vec<Value>| match &args[..] {
+            [Value::Number(num1), Value::Number(num2)] => {
+                let mut array = Vec::new();
+                for i in *num1 as i64..*num2 as i64 {
+                    array.push(Value::Number(i as f64));
+                }
+                Value::Array(array)
+            }
+            _ => Value::Null,
+        }),
+    );
+
+    env.insert(
+        "now".to_string(),
+        Value::Builtin(|_args: Vec<Value>| {
+            let now = std::time::SystemTime::now();
+            let since_the_epoch = now
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("Time went backwards");
+            let in_ms = since_the_epoch.as_millis();
+            Value::Number(in_ms as f64)
+        }),
+    );
+    // env.insert(
+    //     "toSeconds".to_string(),
+    //     Value::Builtin(|args: Vec<Value>| match &args[..] {
+    //         [Value::Number(ms)] => {
+    //             let seconds = *ms as f64 / 1000.0;
+    //             Value::Number(seconds)
+    //         }
+    //         _ => Value::Null,
+    //     }),
+    // );
+
     env
 }
 
-
 impl Environment {
     pub fn new() -> Self {
-       let env = global();
+        let env = global();
         Self {
             variables: env,
             id: Environment::random_id(),

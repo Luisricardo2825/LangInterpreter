@@ -54,6 +54,25 @@ pub enum Expr {
     Block(Vec<Stmt>),
 }
 
+impl Expr {
+    pub fn is_literal(&self) -> bool {
+        matches!(self, Expr::Literal(_))
+    }
+    pub fn to_number(&self) -> Option<f64> {
+        match self {
+            Expr::Literal(Literal::Number(n)) => Some(*n),
+            _ => None,
+        }
+    }
+    pub fn to_string(&self) -> Option<String> {
+        match self {
+            Expr::Literal(Literal::String(s)) => Some(s.clone()),
+            Expr::Identifier(s) => Some(s.clone()),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum BinaryOperator {
     Math(MathOperator),

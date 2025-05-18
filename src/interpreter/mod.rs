@@ -25,9 +25,12 @@ impl Interpreter {
         }
     }
 
-    pub fn eval_expr(&mut self, expr: &Expr, mut env: &mut Environment) -> Value {
+    pub fn eval_expr(&mut self, expr: &Expr, env: &mut Environment) -> Value {
         match expr {
-            Expr::Identifier(name) => env.get(name).cloned().unwrap_or(Value::Null),
+            Expr::Identifier(name) => {
+                let msg = format!("Variable {name} not found");
+                env.get(name).cloned().expect(&msg)
+            },
             Expr::Literal(lit) => match lit {
                 Literal::Number(n) => Value::Number(*n),
                 Literal::Bool(b) => Value::Bool(*b),
@@ -100,7 +103,7 @@ impl Interpreter {
                     _ => return Value::Null,
                 };
                 let arg_values: Vec<_> = args.iter().map(|arg| self.eval_expr(arg, env)).collect();
-                let mut global_copy = env.clone(); //Cria uma copia do ambiente global no momento atual(Previne que as variaveis locais entrem no escopo global)
+                let mut global_copy = env; //Cria uma copia do ambiente global no momento atual(Previne que as variaveis locais entrem no escopo global)
                 match global_copy.get(&name).cloned() {
                     Some(Value::Function { params, body }) => {
                         let mut local_env = Environment::new();
@@ -121,7 +124,7 @@ impl Interpreter {
             }
             Expr::Assign { name, value } => {
                 let val = self.eval_expr(value, env);
-                env.assign(&name.clone(), val).unwrap();
+                env.assign(&name, val).unwrap();
                 Value::Void
             }
             _ => todo!(),
@@ -172,6 +175,10 @@ impl Interpreter {
                 update,
                 body,
             } => {
+                if let Some(()) = self.try_fast_for(init, condition, update, body, env) {
+                    return None;
+                }
+
                 // Executa a inicialização no ambiente atual
                 self.exec_stmt(init, env);
 
@@ -201,6 +208,73 @@ impl Interpreter {
                 None
             }
             _ => todo!(),
+        }
+    }
+
+    fn try_fast_for(
+        &mut self,
+        init: &Stmt,
+        condition: &Option<Expr>,
+        update: &Option<Expr>,
+        body: &[Stmt],
+        env: &mut Environment,
+    ) -> Option<()> {
+        // Só funciona para corpo vazio ou muito simples (otimização conservadora)
+        if !body.is_empty() {
+            return None;
+        }
+
+        // Reconhece: let i = 0;
+        let (var_name, start) = match init {
+            Stmt::Let {
+                name,
+                value: Some(Expr::Literal(Literal::Number(n))),
+            } => (name.as_str(), *n),
+            _ => return None,
+        };
+
+        // Reconhece: i < LIMITE
+        let limit = match condition {
+            Some(Expr::BinaryOp {
+                op: BinaryOperator::Compare(CompareOperator::Lt),
+                left,
+                right,
+            }) => match (&**left, &**right) {
+                (Expr::Identifier(name), Expr::Literal(Literal::Number(n))) if name == var_name => {
+                    *n
+                }
+                _ => return None,
+            },
+            _ => return None,
+        };
+
+        // Reconhece: i = i + 1
+        match update {
+            Some(Expr::Assign { name, value }) if Self::get_condition(name, var_name, value) => {
+                // Executa nativamente
+                let mut i = start;
+                while i < limit {
+                    i += 1.0;
+                }
+                // Atualiza o valor final de i no ambiente
+                env.assign(var_name, Value::Number(i)).ok()?;
+                Some(())
+            }
+            _ => None,
+        }
+    }
+
+    fn get_condition(name: &String, var_name: &str, value: &Box<Expr>) -> bool {
+        let value = value.as_ref();
+        match value {
+            Expr::BinaryOp { op, left, right } => {
+                let lhs = left.as_ref();
+                let lhs = left.as_ref().to_string().unwrap();
+                let inc = right.as_ref().to_number().unwrap();
+
+                name == var_name && lhs == var_name && inc == 1.0
+            }
+            _ => false,
         }
     }
 }

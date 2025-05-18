@@ -1,1 +1,0 @@
-Select * from (Select * from A);
