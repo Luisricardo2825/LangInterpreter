@@ -14,6 +14,7 @@ pub enum Stmt {
     If {
         condition: Expr,
         then_branch: Vec<Stmt>,
+        else_ifs: Vec<(Expr, Option<Vec<Stmt>>)>,
         else_branch: Option<Vec<Stmt>>,
     },
     While {
@@ -42,6 +43,10 @@ pub enum Expr {
         op: BinaryOperator,
         left: Box<Expr>,
         right: Box<Expr>,
+    },
+    MemberAccess {
+        object: Box<Expr>,
+        property: Box<Expr>,
     },
     UnaryOp {
         op: UnaryOperator,

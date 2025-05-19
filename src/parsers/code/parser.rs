@@ -29,15 +29,51 @@ impl Parser {
     }
 
     fn parse_stmt(&mut self) -> Option<Stmt> {
-        match self.peek()? {
+        let stmt = match self.peek()? {
             Token::Let => self.parse_var_decl(),
             Token::Fn => self.parse_func_decl(),
             Token::Return => self.parse_return_stmt(),
             Token::For => self.parse_for_stmt(), // 👈 Adiciona isso
+            Token::If => self.parse_if_stmt(),
             Token::BraceOpen => Some(Stmt::ExprStmt(self.parse_brace()?)),
-
             _ => Some(Stmt::ExprStmt(self.parse_expr()?)),
+        };
+        // Se houver um ponto e vírgula depois do statement, consome
+        self.expect(&Token::Semicolon);
+
+        stmt
+    }
+
+    fn parse_if_stmt(&mut self) -> Option<Stmt> {
+        self.next(); // consume "if"
+        self.expect(&Token::ParenOpen);
+        let condition = self.parse_expr()?;
+        self.expect(&Token::ParenClose);
+
+        let then_branch = self.parse_block();
+
+        let mut else_ifs = vec![];
+
+        while self.peek() == Some(&Token::ElseIf) {
+            self.next(); // consume "else if"
+            let condition = self.parse_expr()?;
+            self.expect(&Token::ParenClose);
+            let then_branch = self.parse_block();
+            else_ifs.push((condition, Some(then_branch)));
         }
+
+        let mut else_branch = None;
+        if self.peek() == Some(&Token::Else) {
+            self.next(); // consume "else"
+            else_branch = Some(self.parse_block());
+        }
+
+        Some(Stmt::If {
+            condition,
+            then_branch,
+            else_ifs,
+            else_branch,
+        })
     }
 
     fn parse_for_stmt(&mut self) -> Option<Stmt> {
@@ -81,6 +117,7 @@ impl Parser {
             body,
         })
     }
+
     fn parse_var_decl(&mut self) -> Option<Stmt> {
         self.next(); // consume "let"
         let name = match self.next()? {
@@ -127,25 +164,6 @@ impl Parser {
         Some(Stmt::Return(value))
     }
 
-    fn parse_block(&mut self) -> Vec<Stmt> {
-        self.expect(&Token::BraceOpen);
-        let mut stmts = Vec::new();
-        while let Some(tok) = self.peek() {
-            if let Token::BraceClose = tok {
-                break;
-            }
-            if let Some(stmt) = self.parse_stmt() {
-                stmts.push(stmt);
-            }
-        }
-        self.expect(&Token::BraceClose);
-        stmts
-    }
-
-    // fn parse_expr(&mut self) -> Option<Expr> {
-    //     self.parse_assignment()
-    // }
-
     fn parse_expr(&mut self) -> Option<Expr> {
         self.parse_assignment_expr()
     }
@@ -169,6 +187,7 @@ impl Parser {
 
         Some(expr)
     }
+
     fn parse_primary(&mut self) -> Option<Expr> {
         match self.next()? {
             Token::Number(n) => Some(Expr::Literal(Literal::Number(n))),
@@ -200,8 +219,56 @@ impl Parser {
                 Some(expr)
             }
             Token::BraceOpen => self.parse_brace(),
+            Token::BracketOpen => Some(self.parse_bracket()?),
             _ => None,
         }
+    }
+
+    fn parse_postfix_expr(&mut self) -> Option<Expr> {
+        let mut expr = self.parse_primary()?;
+
+        loop {
+            match self.peek() {
+                Some(Token::Dot) => {
+                    self.next(); // consume '.'
+                    let property = match self.next()? {
+                        Token::Identifier(name) => Expr::Identifier(name),
+                        _ => return None,
+                    };
+                    expr = Expr::MemberAccess {
+                        object: Box::new(expr),
+                        property: Box::new(property),
+                    };
+                }
+                Some(Token::BracketOpen) => {
+                    self.next(); // consume '['
+                    let property = self.parse_expr()?;
+                    self.expect(&Token::BracketClose);
+                    expr = Expr::MemberAccess {
+                        object: Box::new(expr),
+                        property: Box::new(property),
+                    };
+                }
+                Some(Token::ParenOpen) => {
+                    self.next(); // consume '('
+                    let mut args = Vec::new();
+                    while self.peek() != Some(&Token::ParenClose) {
+                        args.push(self.parse_expr()?);
+                        if !self.expect(&Token::Comma) {
+                            break;
+                        }
+                    }
+                    self.expect(&Token::ParenClose);
+                    expr = Expr::Call {
+                        callee: Box::new(expr),
+                        args,
+                    };
+                }
+                _ => break,
+            }
+        }
+
+        Some(expr)
     }
 
     fn parse_brace(&mut self) -> Option<Expr> {
@@ -210,6 +277,34 @@ impl Parser {
         } else {
             Some(Expr::Block(self.parse_block()))
         }
+    }
+
+    fn parse_block(&mut self) -> Vec<Stmt> {
+        self.expect(&Token::BraceOpen);
+        let mut stmts = Vec::new();
+        while let Some(tok) = self.peek() {
+            if let Token::BraceClose = tok {
+                break;
+            }
+            if let Some(stmt) = self.parse_stmt() {
+                stmts.push(stmt);
+            }
+        }
+        self.expect(&Token::BraceClose);
+        stmts
+    }
+
+    fn parse_bracket(&mut self) -> Option<Expr> {
+        self.expect(&Token::BracketOpen);
+        let mut elements = Vec::new();
+        while self.peek() != Some(&Token::BracketClose) {
+            elements.push(self.parse_expr()?);
+            if !self.expect(&Token::Comma) {
+                break;
+            }
+        }
+        self.expect(&Token::BracketClose);
+        Some(Expr::Literal(Literal::Array(elements)))
     }
 
     fn is_next_object(&self) -> bool {
@@ -244,7 +339,7 @@ impl Parser {
     }
 
     fn parse_binary_expr(&mut self, min_prec: u8) -> Option<Expr> {
-        let mut left: Expr = self.parse_primary()?;
+        let mut left: Expr = self.parse_postfix_expr()?;
 
         while let Some(op) = self.peek().and_then(get_bin_op) {
             let prec = get_precedence(&op);

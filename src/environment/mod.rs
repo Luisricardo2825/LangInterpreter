@@ -33,6 +33,19 @@ impl Value {
         }
     }
 
+    pub fn type_of(&self) -> String {
+        match self {
+            Value::Void => "void".to_string(),
+            Value::Null => "null".to_string(),
+            Value::Bool(_) => "bool".to_string(),
+            Value::Number(_) => "number".to_string(),
+            Value::String(_) => "string".to_string(),
+            Value::Array(_) => "array".to_string(),
+            Value::Object(_) => "object".to_string(),
+            Value::Function { .. } => "function".to_string(),
+            Value::Builtin(_) => "function".to_string(),
+        }
+    }
     // Printable
     pub fn to_string(&self) -> String {
         match self {
@@ -65,6 +78,38 @@ impl Value {
             }
             Value::Function { .. } => "<function>".to_string(),
             Value::Builtin(_) => "<internal>".to_string(),
+        }
+    }
+
+    pub fn to_bool(&self) -> bool {
+        match self {
+            Value::Void => false,
+            Value::Null => false,
+            Value::Bool(b) => *b,
+            Value::Number(n) => *n != 0.0,
+            Value::String(s) => !s.is_empty(),
+            Value::Array(a) => !a.is_empty(),
+            Value::Object(o) => !o.is_empty(),
+            Value::Function { .. } => true,
+            Value::Builtin(_) => true,
+        }
+    }
+
+    pub fn to_number(&self) -> f64 {
+        match self {
+            Value::Number(n) => *n,
+            Value::String(s) => {
+                let msg = format!("Cannot convert string '{}' to number", s);
+                s.parse::<f64>().expect(&msg)
+            }
+            Value::Bool(b) => {
+                if *b {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            _ => panic!("Cannot convert {} to number", self.type_of()),
         }
     }
 }
@@ -111,20 +156,6 @@ fn global() -> HashMap<String, Value> {
         }),
     );
 
-    env.insert(
-        "iif".to_string(),
-        Value::Builtin(|args: Vec<Value>| match &args[..] {
-            [Value::Bool(b), v1, v2] => {
-                if *b {
-                    v1.clone()
-                } else {
-                    v2.clone()
-                }
-            }
-            _ => Value::Null,
-        }),
-    );
-
     // input
     env.insert(
         "input".to_string(),
@@ -166,16 +197,21 @@ fn global() -> HashMap<String, Value> {
             Value::Number(in_ms as f64)
         }),
     );
-    // env.insert(
-    //     "toSeconds".to_string(),
-    //     Value::Builtin(|args: Vec<Value>| match &args[..] {
-    //         [Value::Number(ms)] => {
-    //             let seconds = *ms as f64 / 1000.0;
-    //             Value::Number(seconds)
-    //         }
-    //         _ => Value::Null,
-    //     }),
-    // );
+
+    env.insert(
+        "typeof".to_string(),
+        Value::Builtin(|args: Vec<Value>| match &args[..] {
+            [arg] => Value::String(arg.type_of()),
+            _ => Value::Null,
+        }),
+    );
+    env.insert(
+        "toNumber".to_string(),
+        Value::Builtin(|args: Vec<Value>| match &args[..] {
+            [arg] => Value::Number(arg.to_number()),
+            _ => Value::Null,
+        }),
+    );
 
     env
 }

@@ -7,14 +7,18 @@ use std::fs;
 
 fn main() {
     let filename = env::args().nth(1).expect("Expected file argument");
+    let show_ast = env::args().nth(2).unwrap_or("false".to_owned());
+    let show_ast = show_ast == "true";
     let src = fs::read_to_string(&filename).expect("Failed to read file");
 
     let tokens = Token::lexer(&src).map(|t| t.unwrap()).collect();
     let mut parser = Parser::new(tokens);
     let ast = parser.parse();
 
-    // println!("{:#?}", ast);
+    // bench();
+    if show_ast {
+        println!("{:#?}", ast);
+    }
     let mut interpreter = Interpreter::new(ast);
     interpreter.interpret();
 }
-/* ANCHOR_END: all */

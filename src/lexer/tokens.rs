@@ -8,6 +8,7 @@ pub enum Token {
     Let,
 
     #[token("fn")]
+    #[token("function")]
     Fn,
 
     #[token("return")]
@@ -15,6 +16,9 @@ pub enum Token {
 
     #[token("if")]
     If,
+
+    #[token("else if")]
+    ElseIf,
 
     #[token("else")]
     Else,

@@ -30,7 +30,7 @@ impl Interpreter {
             Expr::Identifier(name) => {
                 let msg = format!("Variable {name} not found");
                 env.get(name).cloned().expect(&msg)
-            },
+            }
             Expr::Literal(lit) => match lit {
                 Literal::Number(n) => Value::Number(*n),
                 Literal::Bool(b) => Value::Bool(*b),
@@ -100,8 +100,22 @@ impl Interpreter {
             Expr::Call { callee, args } => {
                 let name = match callee.as_ref() {
                     Expr::Identifier(name) => name.clone(),
-                    _ => return Value::Null,
+                    Expr::MemberAccess {
+                        object: _,
+                        property,
+                    } => {
+                        let property = *(property.clone());
+                        match property {
+                            Expr::Identifier(name) => name.clone(),
+                            _ => return Value::Null,
+                        }
+                    }
+                    _ => {
+                        println!("Function {:?} not found", callee);
+                        return Value::Void;
+                    }
                 };
+
                 let arg_values: Vec<_> = args.iter().map(|arg| self.eval_expr(arg, env)).collect();
                 let mut global_copy = env; //Cria uma copia do ambiente global no momento atual(Previne que as variaveis locais entrem no escopo global)
                 match global_copy.get(&name).cloned() {
@@ -126,6 +140,41 @@ impl Interpreter {
                 let val = self.eval_expr(value, env);
                 env.assign(&name, val).unwrap();
                 Value::Void
+            }
+            Expr::MemberAccess { object, property } => {
+                let obj = self.eval_expr(object, env);
+                let prop = match property.as_ref() {
+                    Expr::Identifier(name) => Value::String(name.clone()),
+                    Expr::Literal(Literal::Number(n)) => Value::Number(*n),
+                    _ => return Value::Null, // ou erro
+                };
+
+                match (&obj, &prop) {
+                    (Value::Object(obj), Value::String(prop)) => {
+                        let msg = format!("Property {prop} not found");
+                        obj.get(prop).cloned().expect(&msg)
+                    }
+                    (Value::Array(arr), Value::Number(index)) => {
+                        let index = *index as usize;
+                        let msg = format!("Index {index} out of bounds");
+                        arr.get(index).cloned().expect(&msg)
+                    }
+                    (Value::String(arr), Value::Number(index)) => {
+                        let index = index.clone() as usize;
+                        let msg = format!("Index {index} out of bounds");
+                        arr.chars()
+                            .nth(index)
+                            .map(|ch: char| Value::String(ch.to_string()))
+                            .expect(&msg)
+                    }
+                    _ => panic!(
+                        "Cannot access property {:?} of {:?} (type: {:?}, {:?})",
+                        prop.to_string(),
+                        obj.to_string(),
+                        &obj.type_of(),
+                        &prop.type_of()
+                    ),
+                }
             }
             _ => todo!(),
         }
@@ -207,6 +256,44 @@ impl Interpreter {
 
                 None
             }
+            Stmt::If {
+                condition,
+                then_branch,
+                else_ifs,
+                else_branch,
+            } => {
+                if self.eval_expr(condition, env).to_bool() {
+                    for stmt in then_branch {
+                        if let Some(ret) = self.exec_stmt(stmt, env) {
+                            return Some(ret);
+                        }
+                    }
+                } else {
+                    for (cond, branch) in else_ifs {
+                        if self.eval_expr(cond, env).to_bool() {
+                            if branch.is_none() {
+                                return None;
+                            }
+                            let branch = branch.clone().unwrap_or(vec![]);
+                            for stmt in branch {
+                                if let Some(ret) = self.exec_stmt(&stmt, env) {
+                                    return Some(ret);
+                                }
+                            }
+                            return None;
+                        }
+                    }
+
+                    if let Some(else_branch) = else_branch {
+                        for stmt in else_branch {
+                            if let Some(ret) = self.exec_stmt(stmt, env) {
+                                return Some(ret);
+                            }
+                        }
+                    }
+                }
+                None
+            }
             _ => todo!(),
         }
     }
@@ -267,8 +354,7 @@ impl Interpreter {
     fn get_condition(name: &String, var_name: &str, value: &Box<Expr>) -> bool {
         let value = value.as_ref();
         match value {
-            Expr::BinaryOp { op, left, right } => {
-                let lhs = left.as_ref();
+            Expr::BinaryOp { op: _, left, right } => {
                 let lhs = left.as_ref().to_string().unwrap();
                 let inc = right.as_ref().to_number().unwrap();
 
