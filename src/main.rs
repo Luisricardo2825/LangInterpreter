@@ -6,7 +6,7 @@ use std::env;
 use std::fs;
 
 fn main() {
-    let filename = env::args().nth(1).expect("Expected file argument");
+    let filename = env::args().nth(1).unwrap_or("lang.x".to_string());
     let show_ast = env::args().nth(2).unwrap_or("false".to_owned());
     let show_ast = show_ast == "true";
     let src = fs::read_to_string(&filename).expect("Failed to read file");

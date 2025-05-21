@@ -6,11 +6,15 @@ pub enum Stmt {
         name: String,
         value: Option<Expr>,
     },
-    FuncDecl {
+    FuncDecl(FunctionStmt),
+    ClassDecl {
         name: String,
-        params: Vec<String>,
-        body: Vec<Stmt>,
+        superclass: Option<Expr>, // para herança, se suportar
+        methods: Vec<Method>,     // (Nome, estatico)
+        static_fields: HashMap<String, Expr>,
+        instance_fields: HashMap<String, Expr>, // FuncDecl ou algo similar
     },
+    Method(Method),
     If {
         condition: Expr,
         then_branch: Vec<Stmt>,
@@ -27,10 +31,22 @@ pub enum Stmt {
         update: Option<Expr>,
         body: Vec<Stmt>,
     },
+    ForOf {
+        target: Expr,
+        iterable: Expr,
+        body: Vec<Stmt>,
+    },
     ExprStmt(Expr),
     Return(Option<Expr>),
+    Break,
+    Continue,
 }
-
+#[derive(Debug, Clone)]
+pub struct FunctionStmt {
+    pub name: String,
+    pub params: Vec<String>,
+    pub body: Vec<Stmt>,
+}
 #[derive(Debug, Clone)]
 pub enum Expr {
     Literal(Literal),
@@ -44,7 +60,16 @@ pub enum Expr {
         left: Box<Expr>,
         right: Box<Expr>,
     },
-    MemberAccess {
+    GetProperty {
+        object: Box<Expr>,
+        property: Box<Expr>,
+    },
+    SetProperty {
+        object: Box<Expr>,
+        property: Box<Expr>,
+        value: Box<Expr>,
+    },
+    BracketAccess {
         object: Box<Expr>,
         property: Box<Expr>,
     },
@@ -56,6 +81,11 @@ pub enum Expr {
         callee: Box<Expr>,
         args: Vec<Expr>,
     },
+    New {
+        constructor: Box<Expr>,
+        args: Vec<Expr>,
+    },
+    This,
     Block(Vec<Stmt>),
 }
 
@@ -131,3 +161,18 @@ pub enum Literal {
     /// An dictionary mapping keys and values.
     Object(HashMap<String, Expr>),
 }
+
+#[derive(Debug, Clone)]
+pub struct Method {
+    pub name: String,
+    pub params: Vec<String>,
+    pub body: Vec<Stmt>,
+    pub is_static: bool,
+}
+
+// #[derive(Debug, Clone)]
+// pub struct Param {
+//     pub name: String,
+//     pub param_type: String,
+//     pub default_value: Option<Expr>,
+// }

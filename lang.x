@@ -1,15 +1,16 @@
-function getNum() {
-  return 19;
+class Teste {
+  nome = "vazio";
+
+  setNome(nome) {
+    this.nome = nome;
+  }
+
+  getNome() {
+    return this.nome;
+  }
 }
 
-function getAge() {
-  return getNum();
-}
-let a = {
-  name: "John",
-  age: 30,
-  city: "New York",
-  getAge: getAge,
-};
+let teste = new Teste();
+teste.setNome("Ricardo");
 
-print(a.getAge() + 1 < 10);
+println(teste.getNome());

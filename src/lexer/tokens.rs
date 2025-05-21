@@ -7,18 +7,33 @@ pub enum Token {
     #[token("let")]
     Let,
 
+    #[token("const")]
+    Const,
+
     #[token("fn")]
     #[token("function")]
     Fn,
+
+    #[token("class")]
+    Class,
+
+    #[token("new")]
+    New,
+
+    #[token("this")]
+    This,
+
+    #[token("static")]
+    Static,
+
+    #[token("extends")]
+    Extends,
 
     #[token("return")]
     Return,
 
     #[token("if")]
     If,
-
-    #[token("else if")]
-    ElseIf,
 
     #[token("else")]
     Else,
@@ -40,6 +55,18 @@ pub enum Token {
 
     #[token("continue")]
     Continue,
+
+    #[token("try")]
+    Try,
+
+    #[token("catch")]
+    Catch,
+
+    #[token("finally")]
+    Finally,
+
+    #[token("throw")]
+    Throw,
 
     // Identificadores
     #[regex(r"[a-zA-Z_][a-zA-Z0-9_]*", |lex| lex.slice().to_string())]
