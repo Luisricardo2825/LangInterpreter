@@ -82,7 +82,7 @@ pub enum Expr {
         args: Vec<Expr>,
     },
     New {
-        constructor: Box<Expr>,
+        class_name: String,
         args: Vec<Expr>,
     },
     This,

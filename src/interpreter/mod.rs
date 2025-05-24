@@ -1,4 +1,9 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{
+    cell::{Ref, RefCell},
+    collections::HashMap,
+    panic::Location,
+    rc::Rc,
+};
 
 use crate::{
     ast::ast::{
@@ -26,14 +31,24 @@ impl Interpreter {
         for stmt in ast {
             let val = self.exec_stmt(&stmt, env.clone());
             if let ControlFlow::Return(v) = val {
-                println!("{:?}", v);
+                // println!("{:?}", v);
             }
         }
     }
 
+    #[track_caller]
     pub fn eval_expr(&mut self, expr: &Expr, env: Rc<RefCell<Environment>>) -> Value {
         match expr {
-            Expr::Identifier(name) => self.resolve_variable(name, env),
+            Expr::Identifier(name) => {
+                // println!("Identifier Called from {}", Location::caller());
+                let is_this = name == "this";
+
+                // if is_this {
+                //     println!("{:?}", env.borrow().get_vars())
+                // }
+                let value = self.resolve_variable(name, env, is_this);
+                value
+            }
             Expr::Literal(lit) => match lit {
                 Literal::Number(n) => Value::Number(*n),
                 Literal::Bool(b) => Value::Bool(*b),
@@ -117,13 +132,22 @@ impl Interpreter {
                         let name = &func.name;
                         let params = &func.params;
                         let body = &func.body;
-                        let closure = &func.closure;
+                        let is_static = func.is_static;
+
+                        let closure = func.closure.clone();
+                        let closure = if is_static {
+                            closure.borrow().clone()
+                        } else {
+                            closure.borrow().clone().from_parent(env)
+                        };
                         let is_initializer = name == "init";
-                        let local_env =
-                            Rc::new(RefCell::new(Environment::new_enclosed(closure.clone())));
+
+                        let local_env = Rc::new(RefCell::new(closure));
+
                         for (param, val) in params.iter().zip(arg_values) {
                             local_env.borrow_mut().define(param.clone(), val);
                         }
+
                         for stmt in body {
                             match self.exec_stmt(stmt, local_env.clone()) {
                                 ControlFlow::Return(_val) if is_initializer => {
@@ -143,6 +167,7 @@ impl Interpreter {
                                 ControlFlow::None => {}
                             }
                         }
+
                         if is_initializer {
                             return local_env
                                 .borrow()
@@ -152,17 +177,6 @@ impl Interpreter {
                         }
                         Value::Null
                     }
-
-                    Value::Class(class) => {
-                        let instance = class.instantiate();
-                        // let constructor = instance.get_constructor(&arg_values);
-                        // if constructor.is_some() {
-                        //     self.call_function(Rc::new(constructor.unwrap()), None, arg_values);
-                        // }
-
-                        instance
-                    }
-
                     Value::Builtin(func) => func(arg_values),
 
                     other => panic!("Cannot call non-function value: {:?}", other),
@@ -171,6 +185,7 @@ impl Interpreter {
             Expr::Assign { name, value } => {
                 let val = self.eval_expr(value, env.clone());
                 let mut env_mut = env.borrow_mut();
+
                 env_mut.assign(name, val).unwrap();
                 Value::Void
             }
@@ -186,7 +201,10 @@ impl Interpreter {
 
                 match (&obj, &prop) {
                     (Value::Object(obj), Value::String(prop)) => {
-                        let msg = format!("Property {prop} not found");
+                        let msg = format!(
+                            "Property {prop} not found {:?}",
+                            env.borrow().get_vars_name_value()
+                        );
                         obj.borrow().get(prop).cloned().expect(&msg)
                     }
                     (Value::Array(arr), Value::Number(index)) => {
@@ -203,49 +221,23 @@ impl Interpreter {
                             .expect(&msg)
                     }
                     (Value::Instance(instance), Value::String(prop)) => {
-                        let instance_rc = instance;
+                        let class_name = instance.class.name.clone();
+                        let this = instance.this.borrow();
 
-                        let instance = instance.borrow();
-
-                        let class = instance.class.clone();
-                        let class_name = &class.name;
                         let msg = format!("Cannot find '{prop}' in class {class_name}");
-                        let name = prop.to_string();
-                        // println!("methods: {:?}",class.methods);
-                        let this = class.this.borrow();
 
-                        let value = this.get(&name).expect(&msg);
-                        if let Value::Function(function_rc) = &value {
-                            let function = function_rc;
+                        let value = this.get(prop).expect(&msg);
 
-                            // Crie um ambiente com 'this' apontando para a instância
-                            let mut environment =
-                                Environment::new_enclosed(function.closure.clone());
-                            environment
-                                .define("this".to_string(), Value::Instance(instance_rc.clone()));
-
-                            // Execute a função (sem argumentos, ou passe se necessário)
-                            self.execute_block(
-                                &function.body.clone(), // você precisa ter isso salvo no Function
-                                Rc::new(RefCell::new(environment)),
-                            )
-                            .expect("Erro ao executar bloco")
-                        }
                         value
                     }
                     (Value::Class(class), Value::String(prop)) => {
                         let class_name = &class.name;
-                        let msg = format!("Cannot find '{prop}' in class {class_name}");
+                        let msg = format!("Cannot find static '{prop}' in class {class_name}");
                         let name = prop.to_string();
 
-                        if let Some(val) = class.find_method(&name, true) {
-                            return val;
+                        if let Some(val) = class.find_static_method(&name) {
+                            return Value::Function(val);
                         }
-                        // 1. Tentar buscar o campo estático no ambiente 'this' da classe
-                        if let Some(val) = class.this.borrow().get(&name) {
-                            return val;
-                        }
-
                         // 2. Se não encontrar, tentar método estático
 
                         panic!("{}", msg)
@@ -256,31 +248,15 @@ impl Interpreter {
                         let msg = format!("Cannot find '{prop}' in class {class_name}");
                         let name = prop.to_string();
 
-                        if let Some(val) = class.find_method(&name, true) {
-                            return val;
+                        if let Some(val) = class.find_static_method(&name) {
+                            return Value::Function(val);
                         }
                         // 1. Tentar buscar o campo estático no ambiente 'this' da classe
                         if let Some(val) = class.this.borrow().get(&name) {
                             return val;
                         }
 
-                        // 2. Se não encontrar, tentar método estático
-
                         panic!("{}", msg)
-                    }
-                    (Value::This(this), Value::String(prop)) => {
-                        let value = this.as_ref();
-
-                        let msg = format!("Cannot find '{prop}' in {}", value.to_string());
-
-                        match value {
-                            Value::Object(obj) => {
-                                let msg =
-                                    format!("Property {prop} not found in {}", value.to_string());
-                                obj.borrow().get(prop).cloned().expect(&msg)
-                            }
-                            _ => panic!("{}", msg),
-                        }
                     }
                     _ => {
                         panic!(
@@ -330,13 +306,15 @@ impl Interpreter {
                 property,
                 value,
             } => {
-                let obj = self.eval_expr(object, env.clone());
                 let prop = match property.as_ref() {
                     Expr::Identifier(name) => Value::String(name.to_string()),
                     Expr::Literal(Literal::Number(n)) => Value::Number(*n),
                     Expr::Literal(Literal::String(s)) => Value::String(s.clone()),
                     _ => return Value::Null,
                 };
+
+                let obj = self.eval_expr(object, env.clone());
+
                 let val = self.eval_expr(value, env.clone());
 
                 match (obj.clone(), &prop) {
@@ -351,17 +329,19 @@ impl Interpreter {
                         arr[index] = val;
                     }
                     (Value::Instance(instance), Value::String(prop)) => {
-                        todo!()
+                        let _ = instance.this.borrow_mut().assign(prop, val);
                     }
                     (Value::Class(class), Value::String(prop)) => {
                         class.this.borrow().get(prop).unwrap_or(Value::Null);
                     }
-                    (Value::This(value), Value::String(prop)) => {
-                        if let Value::Object(this) = value.as_ref() {
-                            let mut this = this.borrow_mut();
-                            this.insert(prop.clone(), val);
-                        }
-                    }
+                    // (Value::This(value), Value::String(prop)) => {
+                    //     println!("Passou aqui");
+                    //     if let Value::Object(this) = value.as_ref() {
+                    //         let mut this = this.borrow_mut();
+                    //         this.insert(prop.clone(), val);
+                    //         println!("Passou aqui {prop}");
+                    //     }
+                    // }
                     _ => panic!(
                         "Cannot access property {:?} of {:?} (type: {:?}, {:?})",
                         prop.to_string(),
@@ -372,93 +352,29 @@ impl Interpreter {
                 }
                 Value::Void
             }
-            Expr::This => {
-                let mut env = env.borrow_mut();
-                println!("env: {:?}", env.variables.len());
+            Expr::New { class_name, args } => {
+                let class = env.borrow().get(&class_name);
 
-                let variables = env.variables.clone();
-                env.define("this".to_owned(), Value::object(variables));
-                let this = env.get("this").unwrap_or(Value::Null);
+                let class = class.unwrap();
+                let class = class.to_class();
 
-                if this.type_of() == "object" || this.type_of() == "class" {
-                    Value::This(Box::new(this))
-                } else {
-                    let this = this
-                        .to_class()
-                        .this
-                        .borrow()
-                        .get("this")
-                        .unwrap_or(Value::Null);
-                    Value::This(Box::new(this))
+                let instance = class.instantiate();
+
+                if let Value::Instance(instance) = instance.clone() {
+                    // let this = instance.this.borrow();
+                    // let vars = this.variables.clone();
+
+                    // println!("Definindo this como: {:?}", this.get_vars_name_value());
+
+                    env.borrow_mut()
+                        .define("this".to_string(), Value::Instance(instance.clone()));
                 }
+                // println!("Instance: {instance:?}");
+                return instance;
             }
-            Expr::New { constructor, args } => {
-                let class_val = self.eval_expr(constructor, env.clone());
-                let arg_vals = args
-                    .iter()
-                    .map(|arg| self.eval_expr(arg, env.clone()))
-                    .collect::<Vec<_>>();
-
-                match class_val {
-                    Value::Class(class) => {
-                        let instance = Rc::new(RefCell::new(Instance {
-                            class: class.clone(),
-                            fields: HashMap::new(),
-                        }));
-
-                        // Se houver método 'init', chame-o
-                        if let Some(init) = class
-                            .methods
-                            .iter()
-                            .find(|method| method.name == "constructor")
-                        {
-                            let this = Value::Instance(instance.clone());
-                            let method = init.clone();
-
-                            self.call_function(
-                                method.value.to_function().into(),
-                                Some(this),
-                                arg_vals,
-                            );
-                        }
-
-                        Value::Instance(instance)
-                    }
-                    Value::Instance(instance) => {
-                        let class = instance.borrow().class.clone();
-
-                        let fields = instance.borrow_mut().fields.clone();
-
-                        for (name, value) in fields {
-                            class.this.borrow_mut().define(name, value);
-                        }
-                        // Se houver método 'init', chame-o
-                        if let Some(init) = class
-                            .methods
-                            .iter()
-                            .find(|method| method.name == "constructor")
-                        {
-                            let this = Value::Instance(instance.clone());
-                            let method = init.clone();
-
-                            let value = self.call_function(
-                                method.value.to_function().into(),
-                                Some(this),
-                                arg_vals,
-                            );
-                            let value = value.unwrap();
-                            instance
-                                .borrow_mut()
-                                .fields
-                                .insert("this".to_string(), value);
-                        }
-                        // println!("fields: {:?}",instance.borrow_mut().list_fields());
-                        Value::Instance(instance)
-                    }
-                    _ => panic!("Only classes can be constructed with 'new'"),
-                }
+            _ => {
+                todo!("Cannot evaluate expression: {:?}", expr)
             }
-            _ => todo!(),
         }
     }
 
@@ -480,7 +396,7 @@ impl Interpreter {
                     params: params.clone(),
                     body: body.clone(),
                     closure: Rc::clone(&env),
-                    is_initializer: false,
+                    is_static: false,
                 };
 
                 env.borrow_mut()
@@ -643,50 +559,62 @@ impl Interpreter {
 
                 // Construção do mapa de métodos
 
+                let static_method_env = Environment::new_rc();
                 // Avaliar e definir campos estáticos no ambiente da classe
                 for (field_name, initializer) in static_fields {
                     let value = self.eval_expr(initializer, Rc::clone(&class_env));
-                    class_env.borrow_mut().define(field_name.to_string(), value);
+                    static_method_env.borrow_mut().define(field_name.to_string(), value);
                 }
 
                 // Avaliar valores iniciais dos campos de instância (armazenados para uso em `instantiate`)
                 let mut instance_variables = HashMap::new();
+                let instace_env = Rc::new(RefCell::new(Environment::new_enclosed(Rc::clone(
+                    &class_env,
+                ))));
                 for (field_name, initializer) in instance_fields {
-                    let value = self.eval_expr(initializer, Rc::clone(&class_env));
+                    let value = self.eval_expr(initializer, Rc::clone(&instace_env));
                     instance_variables.insert(field_name.to_owned(), value);
                 }
 
                 // Criar novo escopo para métodos (especialmente para `super`)
                 let method_env = if super_class_value.is_some() {
-                    class_env.borrow_mut().define(
+                    instace_env.borrow_mut().define(
                         "super".to_string(),
                         Value::Class(super_class_value.clone().unwrap()),
                     );
-                    Rc::clone(&class_env)
+                    Rc::clone(&instace_env)
                 } else {
-                    Rc::clone(&class_env)
+                    Rc::clone(&instace_env)
                 };
 
                 let mut method_array: Vec<Method> = vec![];
                 let mut static_method_array: Vec<Method> = vec![];
                 for method in methods {
-                    let func = Function::new(
-                        method.name.clone(),
-                        method.params.clone(),
-                        method.body.clone(),
-                        Rc::clone(&method_env),
-                        /* is_initializer */ method.name == "constructor",
-                    );
                     if method.is_static {
+                        let func = Function::new(
+                            method.name.clone(),
+                            method.params.clone(),
+                            method.body.clone(),
+                            Rc::clone(&static_method_env),
+                            method.is_static,
+                        );
+
                         static_method_array.push(Method {
                             name: method.name.clone(),
-                            value: Value::Function(func.into()),
+                            body: Value::Function(func.into()),
                             is_static: method.is_static.clone(),
                         })
                     } else {
+                        let func = Function::new(
+                            method.name.clone(),
+                            method.params.clone(),
+                            method.body.clone(),
+                            Rc::clone(&method_env),
+                            method.is_static,
+                        );
                         method_array.push(Method {
                             name: method.name.clone(),
-                            value: Value::Function(func.into()),
+                            body: Value::Function(func.into()),
                             is_static: method.is_static.clone(),
                         });
                     }
@@ -723,13 +651,33 @@ impl Interpreter {
             }
         }
     }
-    fn resolve_variable(&self, name: &str, env: Rc<RefCell<Environment>>) -> Value {
+
+    #[track_caller]
+    fn resolve_variable(&self, name: &str, env: Rc<RefCell<Environment>>, is_this: bool) -> Value {
+        // println!("Called from {}", Location::caller());
+        // println!(
+        //     "Entrou aqui com {name}  {:?}",
+        //     env.borrow().get_vars_name_value()
+        // );
+        // if is_this {
+        //     println!("Entrou aqui com {name}  {:?}", env.borrow().get_vars_name_value());
+        //     let vars = env.borrow().get_vars();
+        //     env.borrow_mut()
+        //         .define(name.to_string(), Value::object(vars));
+        // }
         // 1. tenta no ambiente atual (local)
         if let Some(val) = env.borrow().get(name) {
+            // println!(
+            //     "Entrou aqui com {name}  {:?}",
+            //     val
+            // );
             return val;
         }
+
+        let this = env.borrow().get("this");
+
         // 2. tenta buscar em this se variável não encontrada
-        if let Some(this_val) = env.borrow().get("this") {
+        if let Some(this_val) = this {
             if let Value::Object(fields) = this_val {
                 if let Some(field_val) = fields.borrow().get(name) {
                     return field_val.clone();
@@ -737,48 +685,13 @@ impl Interpreter {
             }
         }
         // 3. erro variável não encontrada
-        panic!("Undefined variable {}", name);
+        panic!(
+            "Undefined variable '{}'. values: {:?}",
+            name,
+            env.borrow().get_vars_name_value()
+        );
     }
 
-    fn call_function(
-        &mut self,
-        func: Rc<Function>,
-        this: Option<Value>,
-        args: Vec<Value>,
-    ) -> Result<Value, String> {
-        let mut env = Environment::new_enclosed(func.closure.clone());
-
-        // Vincular argumentos
-        for (name, value) in func.params.iter().zip(args) {
-            env.define(name.clone(), value);
-        }
-
-        // Se for método de instância, defina `this`
-        if let Some(this_val) = this {
-            env.define("this".to_string(), this_val);
-        }
-
-        match self.execute_block(&func.body, Rc::new(RefCell::new(env))) {
-            Ok(_) => Ok(Value::Null),
-            Err(ControlFlow::Return(val)) => Ok(val),
-            Err(e) => panic!("Erro ao executar bloco"),
-        }
-    }
-
-    fn execute_block(
-        &mut self,
-        statements: &[Stmt],
-        env: Rc<RefCell<Environment>>,
-    ) -> Result<(), ControlFlow> {
-        let result = (|| {
-            for stmt in statements {
-                self.exec_stmt(stmt, env.clone()); // Pode retornar ControlFlow::Return, Break, etc.
-            }
-            Ok(())
-        })();
-
-        result
-    }
     fn destructure(&self, pattern: &Expr, value: Value, env: Rc<RefCell<Environment>>) {
         match pattern {
             Expr::Identifier(name) => {

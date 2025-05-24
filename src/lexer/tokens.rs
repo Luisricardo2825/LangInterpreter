@@ -20,8 +20,8 @@ pub enum Token {
     #[token("new")]
     New,
 
-    #[token("this")]
-    This,
+    // #[token("this")]
+    // This,
 
     #[token("static")]
     Static,

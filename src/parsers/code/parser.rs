@@ -349,27 +349,37 @@ impl Parser {
         Some(expr)
     }
 
+    fn parse_identifier(&mut self) -> Option<Expr> {
+        let name = match self.next()? {
+            Token::Identifier(name) => name,
+            _ => return None,
+        };
+        Some(Expr::Identifier(name))
+    }
+
+    fn parse_arguments(&mut self) -> Vec<Expr> {
+        let mut args: Vec<Expr> = vec![];
+        while self.peek() != Some(&Token::ParenClose) {
+            let expr = self.parse_expr();
+            if expr.is_some() {
+                args.push(expr.unwrap());
+            }
+            if !self.expect(&Token::Comma) {
+                break;
+            }
+        }
+        self.expect(&Token::ParenClose);
+        args
+    }
+
     fn parse_primary(&mut self) -> Option<Expr> {
         match self.next()? {
-            Token::This => Some(Expr::This),
+            // Token::This => Some(Expr::This),
             Token::New => {
-                let constructor = self.parse_primary()?;
-                let mut args = vec![];
-
-                if self.expect(&Token::ParenOpen) {
-                    while self.peek() != Some(&Token::ParenClose) {
-                        args.push(self.parse_expr()?);
-                        if !self.expect(&Token::Comma) {
-                            break;
-                        }
-                    }
-                    self.expect(&Token::ParenClose);
-                }
-
-                Some(Expr::New {
-                    constructor: Box::new(constructor),
-                    args,
-                })
+                let class_name = self.parse_identifier()?;
+                let args = self.parse_arguments();
+                let class_name = class_name.to_string().unwrap();
+                Some(Expr::New { class_name, args })
             }
             Token::Number(n) => Some(Expr::Literal(Literal::Number(n))),
             Token::String(s) => Some(Expr::Literal(Literal::String(s))),
