@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, io::Write, panic::Location, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, io::Write, rc::Rc};
 
 use crate::ast::ast::Stmt;
 
@@ -27,17 +27,18 @@ impl ControlFlow {
 
 #[derive(Clone, Debug)]
 pub enum Value {
-    Void,
-    Null,
-    Bool(bool),
-    Number(f64),
-    String(String),
-    Array(Rc<RefCell<Vec<Value>>>),
-    Object(Rc<RefCell<HashMap<String, Value>>>),
+    Void,                                        // Primitivo
+    Null,                                        // Primitivo
+    Bool(bool),                                  // Primitivo
+    Number(f64),                                 // Primitivo
+    String(String),                              // Primitivo
+    Array(Rc<RefCell<Vec<Value>>>),              // Primitivo
+    Object(Rc<RefCell<HashMap<String, Value>>>), // Primitivo
     Function(Rc<Function>),
 
     Class(Rc<Class>),
-    Instance(Instance),
+    Method(Rc<Method>),
+    Instance(Rc<Instance>),
     // Method(Rc<Method>),
     This(Box<Value>),
     Builtin(fn(Vec<Value>) -> Value), // função Rust nativa
@@ -46,37 +47,80 @@ pub enum Value {
 #[derive(Debug, Clone)]
 pub struct Method {
     pub name: String,
-    pub body: Value,
+    pub params: Vec<String>,
+    pub body: Vec<Stmt>,
+    pub this: Rc<RefCell<Environment>>,
     pub is_static: bool,
+    pub class: String,
 }
 
 impl Method {
-    pub fn new(name: String, body: Value, is_static: bool) -> Method {
+    pub fn new(
+        name: String,
+        params: Vec<String>,
+        body: Vec<Stmt>,
+        this: Rc<RefCell<Environment>>,
+        is_static: bool,
+        class: String,
+    ) -> Method {
         Method {
             name,
+            params,
             body,
+            this,
             is_static,
+            class,
         }
     }
 
-    pub fn to_function(&self) -> Rc<Function> {
-        match &self.body {
-            Value::Function(function) => function.clone(),
-            _ => panic!("Method body is not a function"),
+    pub fn bind(&self, instance: Value) -> Method {
+        Method {
+            name: self.name.clone(),
+            params: self.params.clone(),
+            body: self.body.clone(),
+            this: self.this.clone(),
+            is_static: self.is_static,
+            class: self.class.clone(),
         }
+        .with_this(instance)
     }
+
+    fn with_this(mut self, instance: Value) -> Self {
+        self.this.borrow_mut().define("this".to_string(), instance);
+        self
+    }
+    // pub fn to_function(&self) -> Rc<Function> {
+    //     match &self.body {
+    //         Value::Function(function) => function.clone(),
+    //         _ => panic!("Method body is not a function"),
+    //     }
+    // }
 }
 #[derive(Debug, Clone)]
 pub struct Instance {
     pub this: Rc<RefCell<Environment>>,
+    // pub static_methods: HashMap<String, Value>,
     pub class: Rc<Class>,
+}
+
+impl Instance {
+    pub fn get(&self, name: &str) -> Option<Value> {
+        if let Some(method) = self.class.find_method(name) {
+            // cria uma função com `this` já definido como essa instância
+            Some(Value::Method(Rc::new(
+                method.bind(Value::Instance(Rc::new(self.clone()))),
+            )))
+        } else {
+            self.this.borrow().get(name)
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct Class {
     pub name: String,
-    pub methods: Vec<Method>,
-    pub statics_methods: Vec<Method>,
+    pub methods: Vec<Rc<Method>>,
+    pub statics_methods: Vec<Rc<Method>>,
 
     pub instance_variables: HashMap<String, Value>,
 
@@ -87,10 +131,10 @@ pub struct Class {
 impl Class {
     pub fn new(
         name: String,
-        methods: Vec<Method>,
+        methods: Vec<Rc<Method>>,
         superclass: Option<Box<Value>>,
         this: Rc<RefCell<Environment>>,
-        statics_methods: Vec<Method>,
+        statics_methods: Vec<Rc<Method>>,
         instance_variables: HashMap<String, Value>,
     ) -> Class {
         Class {
@@ -115,7 +159,8 @@ impl Class {
     }
 
     pub fn instantiate(&self) -> Value {
-        let this = Rc::new(RefCell::new(Environment::new()));
+        let this = Environment::new_rc();
+        this.borrow_mut().copy_from(self.this.clone());
 
         for (field_name, field_value) in self.instance_variables.clone() {
             this.borrow_mut()
@@ -125,15 +170,15 @@ impl Class {
         // Vincula métodos com o ambiente correto
         for method in &self.methods {
             if !method.is_static {
-                let body = method.body.clone();
-
-                let function = body.to_function();
                 let name = method.name.clone();
 
-                let function_env = function.closure.borrow_mut().from_parent(this.clone());
+                let function_env = method.this.clone();
 
-                function.closure.replace(function_env);
-                let body = Value::Function(function);
+                function_env.borrow_mut().copy_from(this.clone());
+                let this_method_env = function_env.borrow().clone();
+                method.this.replace(this_method_env);
+
+                let body = Value::Method(method.to_owned().into());
 
                 this.borrow_mut().define(name.clone(), body.clone());
             }
@@ -143,21 +188,22 @@ impl Class {
             class: Rc::new(self.clone()),
             this: this,
         };
-        Value::Instance(instance)
+
+        Value::Instance(Rc::new(instance))
     }
 
-    pub fn find_method(&self, name: &str) -> Option<Rc<Function>> {
+    pub fn find_method(&self, name: &str) -> Option<Rc<Method>> {
         for method in &self.methods {
             if method.name == name {
-                return Some(method.to_function());
+                return Some(method.clone());
             }
         }
         None
     }
-    pub fn find_static_method(&self, name: &str) -> Option<Rc<Function>> {
+    pub fn find_static_method(&self, name: &str) -> Option<Rc<Method>> {
         for method in &self.statics_methods {
             if method.name == name {
-                return Some(method.to_function());
+                return Some(method.clone());
             }
         }
         None
@@ -180,7 +226,7 @@ pub struct Function {
     pub name: String,
     pub params: Vec<String>,
     pub body: Vec<Stmt>,
-    pub closure: Rc<RefCell<Environment>>,
+    pub environment: Rc<RefCell<Environment>>,
     pub is_static: bool,
 }
 
@@ -189,36 +235,28 @@ impl Function {
         name: String,
         params: Vec<String>,
         body: Vec<Stmt>,
-        closure: Rc<RefCell<Environment>>,
+        environment: Rc<RefCell<Environment>>,
         is_static: bool,
     ) -> Function {
         Function {
             name,
             params,
             body,
-            closure,
+            environment,
             is_static,
         }
-    }
-
-    pub fn to_method(&self) -> Method {
-        Method::new(
-            self.name.clone(),
-            Value::Function(Rc::new(self.clone())),
-            false,
-        )
-    }
-    pub fn to_method_static(&self) -> Method {
-        Method::new(
-            self.name.clone(),
-            Value::Function(Rc::new(self.clone())),
-            true,
-        )
     }
 }
 impl Value {
     pub fn array(vec: Vec<Value>) -> Value {
         Value::Array(Rc::new(RefCell::new(vec)))
+    }
+    pub fn instance(class: Rc<Class>) -> Value {
+        let instance = Instance {
+            class: class.clone(),
+            this: Environment::new_rc(),
+        };
+        Value::Instance(Rc::new(instance))
     }
     pub fn object(map: HashMap<String, Value>) -> Value {
         Value::Object(Rc::new(RefCell::new(map)))
@@ -237,9 +275,38 @@ impl Value {
         Value::Object(Rc::new(RefCell::new(HashMap::new())))
     }
 
+    pub fn is_instance(&self) -> bool {
+        match self {
+            Value::Instance(_) => true,
+            _ => false,
+        }
+    }
     pub fn is_string(&self) -> bool {
         match self {
             Value::String(_) => true,
+            _ => false,
+        }
+    }
+    pub fn is_primitive(&self) -> bool {
+        match self {
+            Value::Void => true,
+            Value::Null => true,
+            Value::Bool(_) => true,
+            Value::Number(_) => true,
+            Value::String(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_object(&self) -> bool {
+        match self {
+            Value::Object(_) => true,
+            _ => false,
+        }
+    }
+    pub fn is_array(&self) -> bool {
+        match self {
+            Value::Array(_) => true,
             _ => false,
         }
     }
@@ -275,7 +342,7 @@ impl Value {
             Value::Class(_) => "class".to_string(),
             Value::Instance { .. } => "instance".to_string(),
             Value::This(value) => value.type_of(),
-            // Value::Method(_) => "function".to_string(),
+            Value::Method(_) => "function".to_string(),
         }
     }
     // Printable
@@ -303,7 +370,7 @@ impl Value {
             Value::Class(_) => "<class>".to_string(),
             Value::Instance(_) => self.convert_class_to_object().stringfy(),
             Value::This(value) => value.to_string(),
-            // Value::Method(_) => "<function>".to_string(),
+            Value::Method(_) => "<function>".to_string(),
         }
     }
 
@@ -341,7 +408,7 @@ impl Value {
             Value::Class(_) => "<class>".to_string(),
             Value::Instance(_) => self.convert_class_to_object().stringfy(),
             Value::This(value) => value.stringfy(),
-            // Value::Method(_) => "<function>".to_string(),
+            Value::Method(_) => "<function>".to_string(),
         }
     }
 
@@ -355,8 +422,13 @@ impl Value {
                 Value::Object(Rc::new(RefCell::new(map)))
             }
             Value::Instance(instance) => {
-                let vars = instance.class.instance_variables.clone();
-
+                let vars = instance.this.borrow().get_vars();
+                // only json valid values
+                let vars = vars
+                    .iter()
+                    .filter(|(_, v)| v.is_primitive() || self.is_object() || self.is_array())
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect::<HashMap<String, Value>>();
                 Value::Object(Rc::new(RefCell::new(vars)))
             }
             _ => panic!("Cannot convert {} to object", self.type_of()),
@@ -427,9 +499,9 @@ impl Value {
         }
     }
 
-    pub fn to_instance(&self) -> Instance {
+    pub fn to_instance(&self) -> Rc<Instance> {
         match self {
-            Value::Instance(instance) => instance.to_owned(),
+            Value::Instance(instance) => instance.clone(),
             _ => panic!("Cannot convert {} to instance", self.type_of()),
         }
     }
@@ -554,7 +626,16 @@ fn global() -> HashMap<String, Value> {
             _ => Value::Null,
         }),
     );
-
+    env.insert(
+        "push".to_string(),
+        Value::Builtin(|args: Vec<Value>| match &args[..] {
+            [Value::Array(arr), value] => {
+                arr.borrow_mut().push(value.clone());
+                Value::Void
+            }
+            _ => Value::Null,
+        }),
+    );
     env
 }
 
@@ -581,17 +662,38 @@ impl Environment {
         }
     }
 
+    pub fn new_rc_enclosed(parent: Rc<RefCell<Environment>>) -> Rc<RefCell<Environment>> {
+        Rc::new(RefCell::new(Environment {
+            variables: global(),
+            parent: Some(parent),
+        }))
+    }
+    pub fn rc_enclosed(&self, parent: Rc<RefCell<Environment>>) -> Rc<RefCell<Environment>> {
+        Rc::new(RefCell::new(Environment {
+            variables: global(),
+            parent: Some(parent),
+        }))
+    }
+
+    pub fn copy_from(&mut self, other: Rc<RefCell<Environment>>) {
+        self.variables = other.borrow().variables.clone();
+    }
+
     pub fn exist_in_current_scope(&self, name: &str) -> bool {
         self.variables.contains_key(name)
     }
     pub fn get(&self, name: &str) -> Option<Value> {
-        if let Some(val) = self.variables.get(name) {
-            Some(val.clone())
+        if self.variables.contains_key(name) {
+            Some(self.variables.get(name).unwrap().clone())
         } else if let Some(parent) = &self.parent {
             parent.borrow().get(name)
         } else {
             None
         }
+    }
+
+    pub fn clear(&mut self) {
+        self.variables.clear();
     }
 
     pub fn define(&mut self, name: String, value: Value) {
@@ -604,15 +706,8 @@ impl Environment {
             self.variables.insert(name.to_string(), value);
             Ok(())
         } else if let Some(parent) = &self.parent {
-            if parent.borrow().exist("this") {
-                let this = parent.borrow().get("this").unwrap();
-                if let Value::Instance(instance) = this {
-                    return instance.class.this.borrow_mut().assign(name, value);
-                }
-            }
             parent.borrow_mut().assign(name, value)
         } else {
-            println!("Called from {}", Location::caller());
             Err(format!("Variable '{}' not defined", name))
         }
     }
@@ -630,6 +725,10 @@ impl Environment {
             variables: self.variables.to_owned(),
             parent: Some(parent),
         }
+    }
+
+    pub fn to_rc(&self) -> Rc<RefCell<Environment>> {
+        Rc::new(RefCell::new(self.clone()))
     }
     pub fn get_vars(&self) -> HashMap<String, Value> {
         self.variables.clone()

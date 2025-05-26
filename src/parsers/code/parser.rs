@@ -215,21 +215,26 @@ impl Parser {
             });
         }
 
+        self.next(); // Token::Assign
+
         // fallback para for tradicional
         let init = if is_let {
             Stmt::Let {
                 name: self.extract_identifier(&pattern)?,
-                value: Some(self.parse_expr()?),
+                value: self.parse_expr(),
             }
         } else {
             self.parse_stmt()?
         };
 
         self.expect(&Token::Semicolon);
+
         let condition = self.parse_expr();
         self.expect(&Token::Semicolon);
         let update = self.parse_expr();
+
         self.expect(&Token::ParenClose);
+
         let body = self.parse_block();
 
         Some(Stmt::For {
@@ -339,6 +344,23 @@ impl Parser {
                         value: Box::new(value),
                     });
                 }
+                // Expr::This(target) => {
+                //     let target = target;
+                //     if target.is_some() {
+                //         let target = target.unwrap().as_ref().to_owned();
+                //         let name = target.to_string()?;
+                //         let value = self.parse_assignment_expr()?;
+                //         return Some(Expr::Assign {
+                //             name,
+                //             value: Box::new(value),
+                //         });
+                //     }
+                //     let value = self.parse_assignment_expr()?;
+                //     return Some(Expr::Assign {
+                //         name: "this".to_string(),
+                //         value: Box::new(value),
+                //     });
+                // }
                 _ => {
                     // só pode atribuir a um identificador
                     panic!("Invalid assignment target");
@@ -374,7 +396,7 @@ impl Parser {
 
     fn parse_primary(&mut self) -> Option<Expr> {
         match self.next()? {
-            // Token::This => Some(Expr::This),
+            Token::This => Some(Expr::This),
             Token::New => {
                 let class_name = self.parse_identifier()?;
                 let args = self.parse_arguments();
@@ -418,6 +440,18 @@ impl Parser {
         }
     }
 
+    // fn parse_this_expr(&mut self) -> Option<Expr> {
+    //     if self.peek() == Some(&Token::Dot) {
+    //         self.next(); // consume '.'
+    //         let property = match self.next()? {
+    //             Token::Identifier(name) => Expr::Identifier(name),
+    //             _ => return None,
+    //         };
+    //         Some(Expr::This(Some(Box::new(property))))
+    //     } else {
+    //         Some(Expr::This(None))
+    //     }
+    // }
     fn parse_postfix_expr(&mut self) -> Option<Expr> {
         let mut expr = self.parse_primary()?;
 

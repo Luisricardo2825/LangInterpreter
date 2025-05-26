@@ -1,37 +1,62 @@
-class Teste {
-  pessoa = {
-    nome: "vazio",
-    idade: 20,
-    arrNum: [1, 2, 3],
-    arrStr: [{ a: "a", b: "b" }],
-    object: { a: "a", b: "b" },
-    arrObj: [
-      { nome: "Luis", posicao: 1 },
-      { nome: "Ricardo", posicao: 2 },
-    ],
-  };
-  static hello() {
-    println("Hello, World!",len("teste"));
-  }
+class Pessoa {
+  nome = null;
+  idade = null;
 
   setNome(nome) {
-    this.pessoa.nome = nome;
+    this.nome = nome;
+    // this.mudouNome();
   }
+
   getNome() {
-    return this.pessoa.nome;
+    return this.nome;
   }
 
-  getPessoa() {
-    return this.pessoa;
+  setIdade(idade) {
+    this.idade = idade;
+  }
+
+  mudouNome() {
+    println("O nome foi mudado para", this.nome);
+  }
+  getIdade() {
+    return this.idade;
+  }
+
+  static hello() {
+    println("Hello World");
   }
 }
 
-let teste = new Teste();
-teste.setNome("Ricardo");
-
-Teste.hello();
-// println("Novo nome:", teste.pessoa.arrNum);
-
-for (let element of teste.pessoa.arrObj) {
-  println("Elemento:", element.nome, element.posicao);
+function createPessoa(nome, idade) {
+  let pessoa = new Pessoa();
+  pessoa.setNome(nome);
+  pessoa.setIdade(idade);
+  return pessoa;
 }
+
+let nomes = [
+  "Ricardo",
+  "João",
+  "Maria",
+  "José",
+  "Ana",
+  "Pedro",
+  "Paulo",
+  "Carlos",
+  "Mariana",
+  "Fernanda",
+];
+let pessoas = [];
+let count = 0;
+for (let nome of nomes) {
+  let this_pessoa = createPessoa(nome, count + 10);
+
+  push(pessoas, this_pessoa);
+  count = count + 1;
+}
+
+pessoas[0].nome = "Ricardo Silva";
+pessoas[1].setNome("João Silva");
+
+println("Pessoas", pessoas[0].getNome());
+println("this", this);
