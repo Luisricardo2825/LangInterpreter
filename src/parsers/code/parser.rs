@@ -41,7 +41,8 @@ impl Parser {
             Token::Identifier(s) if s == "export" => self.parse_export_stmt(),
             Token::Identifier(s) if s == "break" => self.parse_break_stmt(),
             Token::Identifier(s) if s == "continue" => self.parse_continue_stmt(),
-            Token::Identifier(s) if s == "for" => self.parse_for_stmt(), // 👈 Adiciona isso
+            Token::Identifier(s) if s == "for" => self.parse_for_stmt(),
+            Token::Identifier(s) if s == "while" => self.parse_while_stmt(),
             Token::Identifier(s) if s == "if" => self.parse_if_stmt(),
             Token::BraceOpen => Some(Stmt::ExprStmt(self.parse_brace()?)),
             Token::Identifier(s) if s == "class" => self.parse_class_decl(),
@@ -345,6 +346,15 @@ impl Parser {
         })
     }
 
+    fn parse_while_stmt(&mut self) -> Option<Stmt> {
+        self.next(); // consume "while"
+        self.expect(&Token::ParenOpen);
+        let condition = self.parse_expr()?;
+        self.expect(&Token::ParenClose);
+        let body = self.parse_block();
+
+        Some(Stmt::While { condition, body })
+    }
     fn parse_for_stmt(&mut self) -> Option<Stmt> {
         self.next(); // consume 'for'
         self.expect(&Token::ParenOpen);

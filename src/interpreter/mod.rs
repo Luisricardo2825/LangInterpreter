@@ -1094,6 +1094,22 @@ impl Interpreter {
                 }
                 ControlFlow::None
             }
+            Stmt::While { condition, body } => {
+                let loop_env = Environment::new_rc_enclosed(env);
+
+                while self.eval_expr(condition, Rc::clone(&loop_env)).is_truthy() {
+                    for stmt in body.iter() {
+                        match self.eval_stmt(stmt, loop_env.clone()) {
+                            ControlFlow::Return(v) => return ControlFlow::Return(v),
+                            ControlFlow::Break => return ControlFlow::None,
+                            ControlFlow::Continue => break,
+                            ControlFlow::None => {}
+                        }
+                    }
+                }
+
+                ControlFlow::None
+            }
             _ => {
                 todo!()
             }
