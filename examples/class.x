@@ -1,62 +1,15 @@
-class Pessoa {
-  nome = null;
-  idade = null;
+let msg = "Esse é o nome externo";
 
-  setNome(nome) {
-    this.nome = nome;
-    // this.mudouNome();
-  }
+function getName() {
+    return msg;
+}
+class Teste {
+    msg = "Esse é o nome interno";
 
-  getNome() {
-    return this.nome;
-  }
-
-  setIdade(idade) {
-    this.idade = idade;
-  }
-
-  mudouNome() {
-    println("O nome foi mudado para", this.nome);
-  }
-  getIdade() {
-    return this.idade;
-  }
-
-  static hello() {
-    println("Hello World");
-  }
+    getName(msg) {
+        return msg;
+    }
 }
 
-function createPessoa(nome, idade) {
-  let pessoa = new Pessoa();
-  pessoa.setNome(nome);
-  pessoa.setIdade(idade);
-  return pessoa;
-}
-
-let nomes = [
-  "Ricardo",
-  "João",
-  "Maria",
-  "José",
-  "Ana",
-  "Pedro",
-  "Paulo",
-  "Carlos",
-  "Mariana",
-  "Fernanda",
-];
-let pessoas = [];
-let count = 0;
-for (let nome of nomes) {
-  let this_pessoa = createPessoa(nome, count + 10);
-
-  push(pessoas, this_pessoa);
-  count = count + 1;
-}
-
-pessoas[0].nome = "Ricardo Silva";
-pessoas[1].setNome("João Silva");
-
-println("Pessoas", pessoas[0].getNome());
-println("this", this);
+let obj = new Teste();
+Io.println(obj.getName("teste"), getName());

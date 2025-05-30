@@ -2,74 +2,75 @@ use logos::{Lexer, Logos};
 
 #[derive(Debug, Logos, PartialEq, Clone)]
 #[logos(skip r"[ \t\r\n\f]+")]
+#[logos(error = LexingError)]
 pub enum Token {
     // Palavras-chave
-    #[token("let")]
-    Let,
+    // #[token("let")]
+    // Let,
 
-    #[token("const")]
-    Const,
+    // #[token("const")]
+    // Const,
 
-    #[token("fn")]
-    #[token("function")]
-    Fn,
+    // #[token("fn")]
+    // #[token("function")]
+    // Fn,
 
-    #[token("class")]
-    Class,
+    // #[token("class")]
+    // Class,
 
-    #[token("new")]
-    New,
+    // #[token("new")]
+    // New,
 
-    #[token("this")]
-    This,
+    // #[token("this")]
+    // This,
 
-    #[token("static")]
-    Static,
+    // #[token("static")]
+    // Static,
 
-    #[token("extends")]
-    Extends,
+    // #[token("extends")]
+    // Extends,
 
-    #[token("return")]
-    Return,
+    // #[token("return")]
+    // Return,
 
-    #[token("if")]
-    If,
+    // #[token("if")]
+    // If,
 
-    #[token("else")]
-    Else,
+    // #[token("else")]
+    // Else,
 
-    #[token("while")]
-    While,
+    // #[token("while")]
+    // While,
 
-    #[token("for")]
-    For,
+    // #[token("for")]
+    // For,
 
-    #[token("in")]
-    In,
+    // #[token("in")]
+    // In,
 
-    #[token("of")]
-    Of,
+    // #[token("of")]
+    // Of,
 
-    #[token("break")]
-    Break,
+    // #[token("break")]
+    // Break,
 
-    #[token("continue")]
-    Continue,
+    // #[token("continue")]
+    // Continue,
 
-    #[token("try")]
-    Try,
+    // #[token("try")]
+    // Try,
 
-    #[token("catch")]
-    Catch,
+    // #[token("catch")]
+    // Catch,
 
-    #[token("finally")]
-    Finally,
+    // #[token("finally")]
+    // Finally,
 
-    #[token("throw")]
-    Throw,
+    // #[token("throw")]
+    // Throw,
 
     // Identificadores
-    #[regex(r"[a-zA-Z_][a-zA-Z0-9_]*", |lex| lex.slice().to_string())]
+    #[regex(r"[a-zA-Z_$][a-zA-Z0-9_]*", parser_identifier)]
     Identifier(String),
 
     // Literais
@@ -81,10 +82,25 @@ pub enum Token {
     Bool(bool),
 
     #[regex(r#""([^"\\]|\\.)*""#, parse_string)]
+    #[regex(r#"'([^'\\]|\\.)*'"#, parse_string)]
+    #[regex(r#"`([^`\\]|\\.)*`"#, parse_string)]
     String(String),
 
     #[token("null")]
     Null,
+
+    #[token("+=")]
+    AddAssign,
+    #[token("-=")]
+    SubAssign,
+    #[token("*=")]
+    MulAssign,
+    #[token("/=")]
+    DivAssign,
+    #[token("%=")]
+    ModAssign,
+    #[token("**=")]
+    PowAssign,
 
     // Math Operators
     #[token("=")]
@@ -97,12 +113,15 @@ pub enum Token {
     Minus,
 
     #[token("*")]
-    Star,
+    Asterisk,
 
     #[token("/")]
     Slash,
 
     // Lang operators
+    #[token("...")]
+    Ellipsis,
+
     #[token("->")]
     Arrow,
 
@@ -112,9 +131,6 @@ pub enum Token {
     #[token("=>")]
     FatArrow,
 
-    #[token("...")]
-    Ellipsis,
-
     #[token("++")]
     Increment,
 
@@ -122,6 +138,7 @@ pub enum Token {
     Decrement,
 
     #[token("**")]
+    #[token("^")]
     Exponentiation,
 
     #[token("%")]
@@ -187,11 +204,52 @@ pub enum Token {
     #[regex(r"/\*(?:[^*]|\*[^/])*\*/", logos::skip)]
     CommentMultiline,
     // Fim de arquivo
-    #[token(";")]
+    #[token(";", priority = 1)]
     Semicolon,
+
+    #[regex(r".", parse_error, priority = 0)]
+    Unknown(String),
+}
+
+fn parse_error(lex: &mut Lexer<Token>) -> String {
+    let id = lex.slice().to_string();
+    id
+}
+
+fn parser_identifier(lex: &mut Lexer<Token>) -> String {
+    let id = lex.slice().to_string();
+    id
 }
 
 fn parse_string(lex: &mut Lexer<Token>) -> Option<String> {
     let slice = lex.slice();
     Some(slice[1..slice.len() - 1].to_string()) // remove aspas
+}
+
+use anyhow::Error;
+#[derive(Debug)]
+pub struct LexingError(pub Error);
+
+impl<E: std::error::Error + Send + Sync + 'static> From<E> for LexingError {
+    fn from(e: E) -> Self {
+        LexingError(Error::new(e))
+    }
+}
+
+impl Default for LexingError {
+    fn default() -> Self {
+        LexingError(anyhow::anyhow!("Erro léxico padrão"))
+    }
+}
+
+impl PartialEq for LexingError {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.to_string() == other.0.to_string()
+    }
+}
+
+impl Clone for LexingError {
+    fn clone(&self) -> Self {
+        LexingError(anyhow::anyhow!(self.0.to_string()))
+    }
 }
