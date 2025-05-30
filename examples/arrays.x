@@ -1,9 +1,7 @@
 let pessoas = [];
-
-for (let idx of range(1, 10)) {
+let ids = [1,2,3,4,5,6,7,8,9,10];
+for (let idx of ids) {
   pessoas.push({ nome: "Teste " + idx, id: idx });
 }
 
-let arr = [];
-arr[0] = Io;
-arr[0].println(pessoas);
+Io.println(pessoas)

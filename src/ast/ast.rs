@@ -190,6 +190,8 @@ impl Expr {
                         CompareOperator::Ge => ">=",
                         CompareOperator::Lt => "<",
                         CompareOperator::Le => "<=",
+                        CompareOperator::In => "in",
+                        CompareOperator::InstanceOf => "instanceof",
                     },
                     Operator::Logical(l) => match l {
                         LogicalOperator::And => "&&",
@@ -293,12 +295,14 @@ pub enum BinaryOperator {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompareOperator {
-    Eq, // ==
-    Ne, // !=
-    Gt, // >
-    Ge, // >=
-    Lt, // <
-    Le, // <=
+    Eq,         // ==
+    Ne,         // !=
+    Gt,         // >
+    Ge,         // >=
+    Lt,         // <
+    Le,         // <=
+    InstanceOf, // instanceof
+    In,         // in
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -387,7 +391,7 @@ impl Literal {
             Value::Void => Literal::Void,
             Value::Null => Literal::Null,
             Value::Bool(b) => Literal::Bool(*b),
-            Value::Number(n) => Literal::Number(*n),
+            Value::Number(n) => Literal::Number(n.get_value()),
             Value::String(s) => Literal::String(s.clone().to_string()),
             Value::Array(a) => {
                 let mut arr = Vec::new();

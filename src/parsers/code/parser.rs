@@ -317,27 +317,24 @@ impl Parser {
         self.expect(&Token::ParenOpen);
         let condition = self.parse_expr()?;
         self.expect(&Token::ParenClose);
-
         let then_branch = self.parse_block();
 
         let mut else_ifs = vec![];
-
-        // TODO: Else if
-        // while self.expect_keyword("else") {
-        //     self.next(); // consume "else"
-        //     self.next(); // consume "if"
-        //     self.expect(&Token::ParenOpen);
-        //     let condition = self.parse_expr()?;
-        //     self.expect(&Token::ParenClose);
-        //     let then_branch = self.parse_block();
-        //     else_ifs.push((condition, Some(then_branch)));
-        // }
-
         let mut else_branch = None;
 
-        if self.expect_keyword("else") {
+        while self.peek_is_keyword("else") {
             self.next(); // consume "else"
-            else_branch = Some(self.parse_block());
+            if self.peek_is_keyword("if") {
+                self.next(); // consume "if"
+                self.expect(&Token::ParenOpen);
+                let else_if_cond = self.parse_expr()?;
+                self.expect(&Token::ParenClose);
+                let else_if_block = self.parse_block();
+                else_ifs.push((else_if_cond, Some(else_if_block)));
+            } else {
+                else_branch = Some(self.parse_block());
+                break;
+            }
         }
 
         Some(Stmt::If {
@@ -756,14 +753,12 @@ impl Parser {
         self.tokens.get(self.pos)
     }
 
-    fn peek_prev(&self) -> Option<&Token> {
-        if self.pos == 0 {
-            None
-        } else {
-            self.tokens.get(self.pos - 1)
-        }
+    fn peek_is_keyword(&self, keyword: &str) -> bool {
+        matches!(
+            self.peek(),
+            Some(Token::Identifier(k)) if k == keyword
+        )
     }
-
     fn peek_next(&self) -> Option<&Token> {
         self.tokens.get(self.pos + 1)
     }
@@ -817,6 +812,7 @@ impl Parser {
             _ => false,
         }
     }
+
     fn check(&self, expected: &Token) -> bool {
         if let Some(tok) = self.peek() {
             if tok == expected {
@@ -856,6 +852,10 @@ fn get_bin_op(token: &Token) -> Option<Operator> {
         Token::Greater => Some(Operator::Compare(CompareOperator::Gt)),
         Token::LessEqual => Some(Operator::Compare(CompareOperator::Le)),
         Token::GreaterEqual => Some(Operator::Compare(CompareOperator::Ge)),
+        Token::Identifier(i) if i == "instanceof" => {
+            Some(Operator::Compare(CompareOperator::InstanceOf))
+        }
+        Token::Identifier(i) if i == "in" => Some(Operator::Compare(CompareOperator::In)),
 
         Token::And => Some(Operator::Logical(LogicalOperator::And)),
         Token::Or => Some(Operator::Logical(LogicalOperator::Or)),

@@ -52,6 +52,10 @@ impl NativeStringClass {
         Value::String(self.get_value().into())
     }
 
+    pub fn contains(&self, key: &NativeStringClass) -> bool {
+        self.get_value().contains(&key.get_value())
+    }
+
     pub fn get_method_info(&self, method_name: &str) -> (String, usize) {
         for method_info in methods_config() {
             let MethodInfo {
@@ -130,7 +134,7 @@ impl NativeCallable for NativeStringClass {
             "length" => {
                 let this = self.get_value();
 
-                Ok(Value::Number(this.len() as f64))
+                Ok(Value::Number((this.len() as f64).into()))
             }
             "toUpperCase" => {
                 let Value::String(s) = self.get_this() else {
@@ -166,7 +170,7 @@ impl NativeCallable for NativeStringClass {
                         let arg = args[0].clone();
                         match arg {
                             Value::Number(n) => {
-                                let n = n as i32;
+                                let n = n.get_value() as i32;
                                 if n < 0 || n >= s.len() as i32 {
                                     return Ok(Value::Null)
                                 }
@@ -198,11 +202,11 @@ impl NativeCallable for NativeStringClass {
                         let arg = args[0].clone();
                         match arg {
                             Value::Number(n) => {
-                                let n = n as i32;
+                                let n = n.get_value() as i32;
                                 if n < 0 || n >= s.len() as i32 {
                                     return Ok(Value::Null)
                                 }
-                                Ok(Value::Number(s.chars().nth(n as usize).unwrap() as i32 as f64))
+                                Ok(Value::Number((s.chars().nth(n as usize).unwrap() as i32 as f64).into()))
                             }
                             _ => Err(format!("Método nativo '{method_name}' esperava um argumento do tipo String, mas recebeu {}",arg.type_of())),
                         }

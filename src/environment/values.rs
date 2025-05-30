@@ -7,7 +7,7 @@ use crate::{
 
 use super::{
     native::native_callable::NativeCallable,
-    stdlib::{array::NativeArrayClass, string::NativeStringClass},
+    stdlib::{array::NativeArrayClass, number::NativeNumberClass, string::NativeStringClass},
     Environment,
 };
 
@@ -16,7 +16,7 @@ pub enum Value<T = String> {
     Void,                                        // Primitivo
     Null,                                        // Primitivo
     Bool(bool),                                  // Primitivo
-    Number(f64),                                 // Primitivo
+    Number(NativeNumberClass),                   // Primitivo
     String(NativeStringClass),                   // Primitivo
     Array(NativeArrayClass),                     // Primitivo
     Object(Rc<RefCell<HashMap<String, Value>>>), // Primitivo
@@ -34,12 +34,37 @@ pub enum Value<T = String> {
     Internal(T),
 }
 
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Value::Void, Value::Void) => true,
+            (Value::Null, Value::Null) => true,
+            (Value::Bool(a), Value::Bool(b)) => a == b,
+            (Value::Number(a), Value::Number(b)) => a == b,
+            (Value::String(a), Value::String(b)) => a == b,
+            (Value::Array(a), Value::Array(b)) => a == b,
+            (Value::Object(a), Value::Object(b)) => Rc::ptr_eq(&*a, &*b),
+            (Value::Function(a), Value::Function(b)) => Rc::ptr_eq(&*a, &*b),
+            (Value::Class(a), Value::Class(b)) => Rc::ptr_eq(&*a, &*b),
+            (Value::Method(a), Value::Method(b)) => Rc::ptr_eq(&*a, &*b),
+            (Value::Instance(a), Value::Instance(b)) => Rc::ptr_eq(&*a, &*b),
+            (Value::This(a), Value::This(b)) => Rc::ptr_eq(&*a, &*b),
+            (Value::NativeClass(a), Value::NativeClass(b)) => Rc::ptr_eq(&*a, &*b),
+            (Value::NativeFunction(a), Value::NativeFunction(b)) => {
+                let a = &a.1;
+                let b = &b.1;
+                Rc::ptr_eq(a, b)
+            }
+            _ => false,
+        }
+    }
+}
 impl From<serde_json::Value> for Value {
     fn from(value: serde_json::Value) -> Self {
         match value {
             serde_json::Value::Null => Value::Null,
             serde_json::Value::Bool(b) => Value::Bool(b),
-            serde_json::Value::Number(n) => Value::Number(n.as_f64().unwrap()),
+            serde_json::Value::Number(n) => Value::Number(n.as_f64().unwrap().into()),
             serde_json::Value::String(s) => {
                 Value::String(NativeStringClass::new_with_args(vec![Value::String(
                     s.into(),
@@ -246,13 +271,13 @@ impl Class {
         vars
     }
 
-    pub fn instantiate(&self, args: Vec<Value>, interpreter: Interpreter) -> Value {
+    pub fn instantiate(class: &Rc<Class>, args: Vec<Value>, interpreter: Interpreter) -> Value {
         let this = Environment::new_rc();
         let closure = interpreter.env.clone();
-        this.borrow_mut().copy_from(self.this.clone());
+        this.borrow_mut().copy_from(class.this.clone());
         // this.borrow_mut().copy_from(interpreter.env.clone());
 
-        for (field_name, field_value) in self.instance_variables.clone() {
+        for (field_name, field_value) in class.instance_variables.clone() {
             this.borrow_mut()
                 .define(field_name.clone(), field_value.clone());
         }
@@ -263,7 +288,7 @@ impl Class {
         let mut has_to_string = false;
 
         // Vincula métodos com o ambiente correto
-        for method in &self.methods {
+        for method in &class.methods {
             if !method.is_static {
                 let name = method.name.clone();
 
@@ -285,14 +310,14 @@ impl Class {
         // Get constructor
 
         let instance = Instance {
-            class: Rc::new(self.clone()),
+            class: class.clone(),
             this: this.clone(),
         };
 
         let instance = Rc::new(RefCell::new(instance));
         let value = Value::Instance(instance.clone());
         let args_size = args.len();
-        let constructor = self.find_constructor_with_args(args_size);
+        let constructor = class.find_constructor_with_args(args_size);
         if let Some(constructor) = constructor {
             let constructor = constructor.bind(value.clone());
             constructor.call(args, interpreter);
@@ -307,7 +332,7 @@ impl Class {
                 )))],
                 this.clone(),
                 false,
-                self.name.clone(),
+                class.name.clone(),
                 closure,
             );
 
@@ -358,6 +383,44 @@ impl Class {
             methods_names.push(method.name.clone());
         }
         methods_names
+    }
+
+    pub fn is_instance_of(this: &Rc<Class>, other: &Rc<Class>) -> bool {
+        if Rc::ptr_eq(this, other) {
+            return true;
+        }
+
+        let superclass = this.superclass.clone();
+        if superclass.is_none() {
+            return false;
+        }
+        let superclass = this.superclass.clone().unwrap().to_class().to_owned();
+        if Rc::ptr_eq(&superclass, other) {
+            return true;
+        }
+
+        false
+    }
+
+    pub fn is_instance_of2(instance: &Rc<RefCell<Instance>>, class: &Rc<Class>) -> bool {
+        let inst = instance.borrow();
+        let mut current = Some(&inst.class);
+
+        while let Some(cls) = current {
+            if Rc::ptr_eq(cls, class) {
+                return true;
+            }
+
+            current = match &cls.superclass {
+                Some(boxed) => match &**boxed {
+                    Value::Class(super_class) => Some(&super_class),
+                    _ => None,
+                },
+                None => None,
+            };
+        }
+
+        false
     }
 }
 
@@ -493,6 +556,13 @@ impl Value {
             _ => false,
         }
     }
+
+    pub fn is_class(&self) -> bool {
+        match self {
+            Value::Class(_) => true,
+            _ => false,
+        }
+    }
     pub fn is_string(&self) -> bool {
         match self {
             Value::String(_) => true,
@@ -542,7 +612,7 @@ impl Value {
             Value::Void => false,
             Value::Null => false,
             Value::Bool(b) => *b,
-            Value::Number(n) => *n != 0.0,
+            Value::Number(n) => *n != 0.0.into(),
             Value::String(s) => !s.is_empty(),
             Value::Array(a) => !a.get_value().borrow().is_empty(),
             Value::Object(o) => !o.borrow().is_empty(),
@@ -584,7 +654,6 @@ impl Value {
             Value::Number(n) => n.to_string(),
             Value::String(s) => s.get_value().clone(),
             Value::Array(a) => {
-                println!("Entrou aqui");
                 let mut s = "[".to_string();
                 for (i, v) in a.get_value().borrow().iter().enumerate() {
                     s += &v.to_string();
@@ -709,7 +778,7 @@ impl Value {
             Value::Void => false,
             Value::Null => false,
             Value::Bool(b) => *b,
-            Value::Number(n) => *n != 0.0,
+            Value::Number(n) => *n != 0.0.into(),
             Value::String(s) => !s.is_empty(),
             Value::Array(a) => !a.get_value().borrow().is_empty(),
             Value::Object(o) => !o.borrow().is_empty(),
@@ -725,7 +794,7 @@ impl Value {
 
     pub fn to_number(&self) -> f64 {
         match self {
-            Value::Number(n) => *n,
+            Value::Number(n) => n.get_value(),
             Value::String(s) => {
                 let s = s.get_value();
                 let msg = format!("Cannot convert string '{}' to number", s);

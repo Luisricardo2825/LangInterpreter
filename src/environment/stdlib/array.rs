@@ -101,7 +101,7 @@ impl NativeCallable for NativeArrayClass {
 
                 let v = self.get_value();
                 let vec = v.borrow();
-                let start = start as usize;
+                let start = start.get_value() as usize;
                 let max_size = vec.len();
 
                 if end.is_null() {
@@ -111,7 +111,7 @@ impl NativeCallable for NativeArrayClass {
                 let Value::Number(end) = end else {
                     return Err(format!("Expected a number, got {}", end.type_of()));
                 };
-                let mut end = end as usize;
+                let mut end = end.get_value() as usize;
 
                 if end > max_size {
                     end = max_size;
@@ -154,7 +154,7 @@ impl NativeCallable for NativeArrayClass {
                     .position(|v| v.equal(value))
                     .map(|i| i as f64)
                     .unwrap_or(-1.0);
-                Ok(Value::Number(index))
+                Ok(Value::Number(index.into()))
             }
             "lastIndexOf" => {
                 let value = &args.get(0).unwrap_or(&Value::Void);
@@ -166,7 +166,7 @@ impl NativeCallable for NativeArrayClass {
                     .rposition(|v| v.equal(value))
                     .map(|i| i as f64)
                     .unwrap_or(-1.0);
-                Ok(Value::Number(index))
+                Ok(Value::Number(index.into()))
             }
             "includes" => {
                 let value = &args.get(0).unwrap_or(&Value::Void);
@@ -183,7 +183,9 @@ impl NativeCallable for NativeArrayClass {
                 [_] => Ok(Value::Bool(false)),
                 _ => Err("isArray espera um único argumento".to_string()),
             },
-            "length" => Ok(Value::Number(self.get_value().borrow().len() as f64)),
+            "length" => Ok(Value::Number(
+                (self.get_value().borrow().len() as f64).into(),
+            )),
             "of" => match &args[..] {
                 values => {
                     // println!("Entrou aqui");

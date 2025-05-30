@@ -110,7 +110,7 @@ fn global() -> HashMap<String, Value> {
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("Time went backwards");
             let in_ms = since_the_epoch.as_millis();
-            Value::Number(in_ms as f64)
+            Value::Number((in_ms as f64).into())
         }),
     );
 
@@ -134,6 +134,12 @@ fn global() -> HashMap<String, Value> {
         "String".to_owned(),
         Value::NativeClass(Rc::new(RefCell::new(
             stdlib::string::NativeStringClass::new(),
+        ))),
+    );
+    env.insert(
+        "Number".to_owned(),
+        Value::NativeClass(Rc::new(RefCell::new(
+            stdlib::number::NativeNumberClass::new(),
         ))),
     );
     env

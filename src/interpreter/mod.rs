@@ -172,7 +172,7 @@ impl Interpreter {
                 value
             }
             Expr::Literal(lit) => match lit {
-                Literal::Number(n) => Value::Number(*n),
+                Literal::Number(n) => Value::Number(n.into()),
                 Literal::Bool(b) => Value::Bool(*b),
                 Literal::String(s) => Value::String(s.clone().into()),
                 Literal::Null => Value::Null,
@@ -248,19 +248,19 @@ impl Interpreter {
                             _ => panic!("Invalid operands for +: {:?} and {:?}", left, right),
                         },
                         BinaryOperator::Subtract => {
-                            Value::Number(left.to_number() - right.to_number())
+                            Value::Number((left.to_number() - right.to_number()).into())
                         }
                         BinaryOperator::Multiply => {
-                            Value::Number(left.to_number() * right.to_number())
+                            Value::Number((left.to_number() * right.to_number()).into())
                         }
                         BinaryOperator::Divide => {
-                            Value::Number(left.to_number() / right.to_number())
+                            Value::Number((left.to_number() / right.to_number()).into())
                         }
                         BinaryOperator::Exponentiate => {
-                            Value::Number(left.to_number().powf(right.to_number()))
+                            Value::Number(left.to_number().powf(right.to_number()).into())
                         }
                         BinaryOperator::Modulo => {
-                            Value::Number(left.to_number() % right.to_number())
+                            Value::Number((left.to_number() % right.to_number()).into())
                         }
                     },
 
@@ -268,12 +268,45 @@ impl Interpreter {
                         match comp_op {
                             CompareOperator::Eq => Value::Bool(a == b),
                             CompareOperator::Ne => Value::Bool(a != b),
-                            CompareOperator::Gt => Value::Bool(a > b),
-                            CompareOperator::Ge => Value::Bool(a >= b),
-                            CompareOperator::Lt => Value::Bool(a < b),
-                            CompareOperator::Le => Value::Bool(a <= b),
+                            CompareOperator::Gt => Value::Bool(a.get_value() > b.get_value()),
+                            CompareOperator::Ge => Value::Bool(a.get_value() >= b.get_value()),
+                            CompareOperator::Lt => Value::Bool(a.get_value() < b.get_value()),
+                            CompareOperator::Le => Value::Bool(a.get_value() <= b.get_value()),
+                            _ => panic!("Invalid comparison operator for numbers: {:?}", comp_op),
                         }
                     }
+                    (
+                        Operator::Compare(comp_op),
+                        Value::Instance(instance),
+                        Value::Class(class),
+                    ) => match comp_op {
+                        CompareOperator::InstanceOf => {
+                            return Value::Bool(Class::is_instance_of2(&instance, &class));
+                        }
+                        _ => Value::Bool(false),
+                    },
+                    (Operator::Compare(comp_op), a, b) => match comp_op {
+                        CompareOperator::Eq => Value::Bool(a.equal(&b)),
+
+                        CompareOperator::In => match (&a, &b) {
+                            (Value::String(a), Value::Object(b)) => {
+                                let b = b.borrow();
+                                Value::Bool(b.contains_key(&a.to_string()))
+                            }
+                            (Value::Number(idx), Value::Array(b)) => {
+                                let idx = idx.get_value() as usize;
+                                let b = b.get_value();
+                                let b = b.borrow();
+                                let item = b.get(idx);
+                                Value::Bool(item.is_some())
+                            }
+                            _ => panic!("Invalid operands for 'in': {:?} and {:?}", a, b),
+                        },
+                        CompareOperator::InstanceOf => {
+                            panic!("Invalid operands for 'instanceof': {:?} and {:?}", a, b)
+                        }
+                        _ => Value::Bool(false),
+                    },
 
                     (Operator::Logical(log_op), Value::Bool(a), Value::Bool(b)) => match log_op {
                         LogicalOperator::And => Value::Bool(a && b),
@@ -286,7 +319,9 @@ impl Interpreter {
             Expr::UnaryOp { op, expr, postfix } => {
                 let val = self.eval_expr(expr, env.clone());
                 match op {
-                    crate::ast::ast::UnaryOperator::Negative => Value::Number(-val.to_number()),
+                    crate::ast::ast::UnaryOperator::Negative => {
+                        Value::Number((-val.to_number()).into())
+                    }
                     crate::ast::ast::UnaryOperator::Not => Value::Bool(!val.to_bool()),
                     crate::ast::ast::UnaryOperator::Typeof => Value::String(val.type_of().into()),
                     crate::ast::ast::UnaryOperator::Increment => {
@@ -296,13 +331,13 @@ impl Interpreter {
                                 let name = name.clone();
                                 let previous_val = env.borrow().get(&name).unwrap();
                                 env.borrow_mut()
-                                    .assign(&name, Value::Number(new_val))
+                                    .assign(&name, Value::Number(new_val.into()))
                                     .unwrap();
 
                                 if *postfix {
                                     previous_val
                                 } else {
-                                    Value::Number(new_val)
+                                    Value::Number(new_val.into())
                                 }
                             }
                             Expr::Literal(literal) => match literal {
@@ -310,9 +345,9 @@ impl Interpreter {
                                     let new_val = number + 1.0;
 
                                     if *postfix {
-                                        Value::Number(*number)
+                                        Value::Number(number.into())
                                     } else {
-                                        Value::Number(new_val)
+                                        Value::Number(new_val.into())
                                     }
                                 }
                                 _ => {
@@ -329,11 +364,13 @@ impl Interpreter {
                             _ => panic!("Invalid operand for decrement: {:?}", expr),
                         };
                         env.borrow_mut()
-                            .assign(&name, Value::Number(new_val))
+                            .assign(&name, Value::Number(new_val.into()))
                             .unwrap();
-                        Value::Number(new_val)
+                        Value::Number(new_val.into())
                     }
-                    crate::ast::ast::UnaryOperator::Positive => Value::Number(val.to_number()),
+                    crate::ast::ast::UnaryOperator::Positive => {
+                        Value::Number(val.to_number().abs().into())
+                    }
                 }
             }
             Expr::Call { callee, args } => {
@@ -449,7 +486,7 @@ impl Interpreter {
 
                         match (arr, index) {
                             (Value::Array(array), Value::Number(n)) => {
-                                let idx = n as usize;
+                                let idx = n.get_value() as usize;
                                 let get_value = array.get_value();
                                 let mut array = get_value.borrow_mut();
                                 let item = array.get(idx);
@@ -475,7 +512,7 @@ impl Interpreter {
 
                 let prop = match property.as_ref() {
                     Expr::Identifier(name) => Value::String(name.to_string().into()),
-                    Expr::Literal(Literal::Number(n)) => Value::Number(*n),
+                    Expr::Literal(Literal::Number(n)) => Value::Number(n.into()),
                     Expr::Literal(Literal::String(s)) => Value::String(s.clone().into()),
                     _ => return Value::Null,
                 };
@@ -548,7 +585,7 @@ impl Interpreter {
                         obj.borrow().get(&prop).cloned().expect(&msg)
                     }
                     (Value::Array(arr), Value::Number(index)) => {
-                        let index = *index as usize;
+                        let index = index.get_value() as usize;
                         let value = arr
                             .get_value()
                             .borrow()
@@ -559,7 +596,7 @@ impl Interpreter {
                     }
                     (Value::String(arr), Value::Number(index)) => {
                         let arr = arr.to_string();
-                        let index = *index as usize;
+                        let index = index.get_value() as usize;
                         arr.chars()
                             .nth(index)
                             .map(|ch| Value::String(ch.to_string().into()))
@@ -581,7 +618,7 @@ impl Interpreter {
             } => {
                 let prop = match property.as_ref() {
                     Expr::Identifier(name) => Value::String(name.to_string().into()),
-                    Expr::Literal(Literal::Number(n)) => Value::Number(*n),
+                    Expr::Literal(Literal::Number(n)) => Value::Number(n.into()),
                     Expr::Literal(Literal::String(s)) => Value::String(s.clone().into()),
                     _ => return Value::Null,
                 };
@@ -598,7 +635,7 @@ impl Interpreter {
                             .expect(&msg);
                     }
                     (Value::Array(arr), Value::Number(index)) => {
-                        let index = *index as usize;
+                        let index = index.get_value() as usize;
                         // let msg = format!("Index {index} out of bounds");
                         let get_value = arr.get_value();
                         let mut arr = get_value.borrow_mut();
@@ -646,7 +683,7 @@ impl Interpreter {
                         let closure = class.closure.clone();
                         // println!("Env: {:?}", closure.borrow().get_vars_name_value());
                         interpreter.env = closure;
-                        let instance = class.instantiate(arg_values, interpreter);
+                        let instance = Class::instantiate(&class, arg_values, interpreter);
 
                         return instance;
                     }
@@ -655,7 +692,7 @@ impl Interpreter {
 
                         return instance;
                     }
-                    _ => panic!("'{}' is not a class.", class_name),
+                    _ => panic!("'{}' is not a class. {}", class_name, value.type_of()),
                 }
             }
             Expr::This => env.borrow().get("this").unwrap_or(Value::Null),
@@ -915,16 +952,13 @@ impl Interpreter {
                         .define(field_name.to_owned(), value);
                 }
 
-                // // Criar novo escopo para métodos (especialmente para `super`)
-                // let method_env = if super_class_value.is_some() {
-                //     instace_env.borrow_mut().define(
-                //         "super".to_string(),
-                //         Value::Class(super_class_value.clone().unwrap()),
-                //     );
-                //     Rc::clone(&instace_env)
-                // } else {
-                //     Rc::clone(&instace_env)
-                // };
+                // TODO: Implementar a classe "pai" corretamente
+                if super_class_value.is_some() {
+                    instace_env.borrow_mut().define(
+                        "super".to_string(),
+                        Value::Class(super_class_value.clone().unwrap()),
+                    );
+                }
 
                 let mut method_array: Vec<Rc<Method>> = vec![];
                 let mut static_method_array: Vec<Rc<Method>> = vec![];
@@ -976,7 +1010,7 @@ impl Interpreter {
 
                 // self.classes.insert(name.clone(), class.clone());
                 env.borrow_mut()
-                    .define(name.clone(), Value::Class(Rc::new(class.clone())));
+                    .define(name.clone(), Value::Class(Rc::new(class)));
 
                 // ControlFlow::Return(Value::Class(Rc::new(class)))
                 ControlFlow::None

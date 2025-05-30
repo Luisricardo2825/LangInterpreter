@@ -1,6 +1,3 @@
-fn input_nome(){
-     let nome = input("Digite seu nome: ")
-     println(nome)
-}
+let input = Io.readln("Digite um nome:","Nenhum nome digitado");
 
-input_nome()
+Io.println(input)

@@ -29,7 +29,7 @@ impl NativeCallable for NativeJsonClass {
                 Ok(Value::from(json))
             }
 
-            "stringfy" => {
+            "stringify" => {
                 let json = args[0].stringfy();
                 // let json_string = serde_json::to_string(&json).unwrap();
                 Ok(Value::String(json.into()))
