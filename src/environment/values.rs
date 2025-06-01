@@ -1,7 +1,12 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{
+    any::{Any, TypeId},
+    cell::RefCell,
+    collections::HashMap,
+    rc::Rc,
+};
 
 use crate::{
-    ast::ast::{ControlFlow, Stmt},
+    ast::ast::{ControlFlow, Expr, Stmt},
     interpreter::Interpreter,
 };
 
@@ -32,6 +37,7 @@ pub enum Value<T = String> {
     NativeFunction((String, Rc<RefCell<dyn NativeCallable>>)),
 
     Internal(T),
+    Expr(Expr),
 }
 
 impl PartialEq for Value {
@@ -56,6 +62,17 @@ impl PartialEq for Value {
                 Rc::ptr_eq(a, b)
             }
             _ => false,
+        }
+    }
+}
+
+impl PartialOrd for Value {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        match (self, other) {
+            (Value::Number(a), Value::Number(b)) => a.partial_cmp(b),
+            (Value::String(a), Value::String(b)) => a.partial_cmp(b),
+            (Value::Bool(a), Value::Bool(b)) => a.partial_cmp(b),
+            _ => None, // Comparações entre tipos diferentes ou não ordenáveis retornam None
         }
     }
 }
@@ -86,6 +103,7 @@ impl From<serde_json::Value> for Value {
 pub struct Method {
     pub name: String,
     pub params: Vec<String>,
+    pub vararg: Option<String>,
     pub body: Vec<Stmt>,
     pub this: Rc<RefCell<Environment>>,
     pub is_static: bool,
@@ -97,6 +115,8 @@ impl Method {
     pub fn new(
         name: String,
         params: Vec<String>,
+        vararg: Option<String>,
+
         body: Vec<Stmt>,
         this: Rc<RefCell<Environment>>,
         is_static: bool,
@@ -106,6 +126,7 @@ impl Method {
         Method {
             name,
             params,
+            vararg,
             body,
             this,
             is_static,
@@ -118,6 +139,7 @@ impl Method {
         Method {
             name: self.name.clone(),
             params: self.params.clone(),
+            vararg: self.vararg.clone(),
             body: self.body.clone(),
             this: self.this.clone(),
             is_static: self.is_static,
@@ -132,11 +154,11 @@ impl Method {
         self
     }
 
-    pub fn call(&self, args: Vec<Value>, mut interpreter: Interpreter) -> Value {
+    pub fn call(&self, mut args: Vec<Value>, mut interpreter: Interpreter) -> Value {
         let name = &self.name;
         let params = &self.params;
         let body = &self.body;
-
+        let vararg = &self.vararg;
         let is_initializer = name == "init";
 
         let local_env = self
@@ -147,11 +169,24 @@ impl Method {
             .from_parent(self.this.clone())
             .to_rc();
 
-        for (param, val) in params
-            .iter()
-            .zip(args.iter().chain(std::iter::repeat(&Value::Null)))
-        {
-            local_env.borrow_mut().define(param.clone(), val.clone());
+        for idx in 0..params.len() {
+            let param = params.get(idx).unwrap();
+            let val = if !args.is_empty() {
+                args.remove(0)
+            } else {
+                Value::Null
+            };
+
+            local_env.borrow_mut().define(param.clone(), val);
+            // remove from param_value
+        }
+
+        if vararg.is_some() {
+            let vararg = vararg.as_ref().unwrap();
+            let vararg_name = vararg.clone();
+
+            let vararg_values = Value::array(args);
+            local_env.borrow_mut().define(vararg_name, vararg_values);
         }
         // local_env
         //     .borrow_mut()
@@ -177,15 +212,15 @@ impl Method {
             }
         }
 
-        //    local_env.borrow_mut().clear();
-        if is_initializer {
-            return local_env
-                .borrow()
-                .get("this")
-                .unwrap_or(Value::Null)
-                .clone();
-        }
-        Value::Null
+        // //    local_env.borrow_mut().clear();
+        // if is_initializer {
+        //     return local_env
+        //         .borrow()
+        //         .get("this")
+        //         .unwrap_or(Value::Null)
+        //         .clone();
+        // }
+        Value::Void
     }
 }
 #[derive(Debug, Clone)]
@@ -226,12 +261,12 @@ impl Instance {
 pub struct Class {
     pub name: String,
     pub methods: Vec<Rc<Method>>,
-    pub statics_methods: Vec<Rc<Method>>,
+    pub static_methods: Vec<Rc<Method>>,
 
     pub instance_variables: HashMap<String, Value>,
     pub static_variables: HashMap<String, Value>,
 
-    pub superclass: Option<Box<Value>>, // Value::Class
+    pub superclass: Option<Rc<Class>>, // Value::Class
     pub this: Rc<RefCell<Environment>>,
 
     pub closure: Rc<RefCell<Environment>>,
@@ -241,9 +276,9 @@ impl Class {
     pub fn new(
         name: String,
         methods: Vec<Rc<Method>>,
-        superclass: Option<Box<Value>>,
+        superclass: Option<Rc<Class>>,
         this: Rc<RefCell<Environment>>,
-        statics_methods: Vec<Rc<Method>>,
+        static_methods: Vec<Rc<Method>>,
         instance_variables: HashMap<String, Value>,
         static_variables: HashMap<String, Value>,
         closure: Rc<RefCell<Environment>>,
@@ -253,7 +288,7 @@ impl Class {
             methods,
             superclass,
             this,
-            statics_methods,
+            static_methods,
             instance_variables,
             static_variables,
             closure,
@@ -273,7 +308,7 @@ impl Class {
 
     pub fn instantiate(class: &Rc<Class>, args: Vec<Value>, interpreter: Interpreter) -> Value {
         let this = Environment::new_rc();
-        let closure = interpreter.env.clone();
+        // let closure = interpreter.env.clone();
         this.borrow_mut().copy_from(class.this.clone());
         // this.borrow_mut().copy_from(interpreter.env.clone());
 
@@ -285,16 +320,16 @@ impl Class {
         // Add toString method
 
         // find toString in methods
-        let mut has_to_string = false;
+        // let mut has_to_string = false;
 
         // Vincula métodos com o ambiente correto
         for method in &class.methods {
             if !method.is_static {
                 let name = method.name.clone();
 
-                if name == "toString" {
-                    has_to_string = true;
-                }
+                // if name == "toString" {
+                //     has_to_string = true;
+                // }
                 let function_env = method.this.clone();
 
                 function_env.borrow_mut().copy_from(this.clone());
@@ -316,31 +351,31 @@ impl Class {
 
         let instance = Rc::new(RefCell::new(instance));
         let value = Value::Instance(instance.clone());
-        let args_size = args.len();
-        let constructor = class.find_constructor_with_args(args_size);
+        let constructor = class.get_constructor();
         if let Some(constructor) = constructor {
             let constructor = constructor.bind(value.clone());
             constructor.call(args, interpreter);
         }
 
-        if !has_to_string {
-            let method = Method::new(
-                "toString".to_string(),
-                vec![],
-                vec![Stmt::Return(Some(crate::ast::ast::Expr::Literal(
-                    crate::ast::ast::Literal::String(value.stringfy()),
-                )))],
-                this.clone(),
-                false,
-                class.name.clone(),
-                closure,
-            );
+        // if !has_to_string {
+        //     // println!("Criando toString para {}", class.name.clone());
+        //     let method = Method::new(
+        //         "toString".to_string(),
+        //         vec![],
+        //         vec![Stmt::Return(Some(crate::ast::ast::Expr::Literal(
+        //             crate::ast::ast::Literal::String(value.to_string()),
+        //         )))],
+        //         this.clone(),
+        //         false,
+        //         class.name.clone(),
+        //         closure,
+        //     );
 
-            let body = Value::Method(method.to_owned().into());
+        //     let body = Value::Method(method.to_owned().into());
 
-            this.borrow_mut()
-                .define("toString".to_string(), body.clone());
-        }
+        //     this.borrow_mut()
+        //         .define("toString".to_string(), body.clone());
+        // }
         // println!("this: {}", this.borrow().get_vars_string());
         value
     }
@@ -361,8 +396,17 @@ impl Class {
         }
         None
     }
+
+    pub fn get_constructor(&self) -> Option<Rc<Method>> {
+        for method in &self.methods {
+            if method.name == "constructor" {
+                return Some(method.clone());
+            }
+        }
+        None
+    }
     pub fn find_static_method(&self, name: &str) -> Option<Rc<Method>> {
-        for method in &self.statics_methods {
+        for method in &self.static_methods {
             if method.name == name {
                 return Some(method.clone());
             }
@@ -379,48 +423,101 @@ impl Class {
         for method in &self.methods {
             methods_names.push(method.name.clone());
         }
-        for method in &self.statics_methods {
+        for method in &self.static_methods {
             methods_names.push(method.name.clone());
         }
         methods_names
     }
 
-    pub fn is_instance_of(this: &Rc<Class>, other: &Rc<Class>) -> bool {
-        if Rc::ptr_eq(this, other) {
-            return true;
-        }
+    fn mesma_struct_dyn(a: &dyn Any, b: &dyn Any) -> bool {
+        a.type_id() == b.type_id()
+    }
+    pub fn is_instance_of(instance: &Value, class: &Value) -> bool {
+        match instance {
+            Value::Void => todo!(),
+            Value::Null => todo!(),
+            Value::Bool(_) => todo!(),
+            Value::Number(instance) => {
+                let native_class_rc = class.get_native_class(); // guarda o Rc
+                if native_class_rc.is_none() {
+                    return false;
+                }
+                let native_class_rc = native_class_rc.unwrap();
+                let native_class_ref = native_class_rc.borrow(); // faz o borrow depois
+                Self::mesma_struct_dyn(instance, &*native_class_ref)
+            }
+            Value::String(instance) => {
+                let native_class_rc = class.get_native_class(); // guarda o Rc
+                if native_class_rc.is_none() {
+                    return false;
+                }
+                let native_class_rc = native_class_rc.unwrap();
+                let native_class_ref = native_class_rc.borrow(); // faz o borrow depois
+                Self::mesma_struct_dyn(instance, &*native_class_ref)
+            }
+            Value::Array(instance) => {
+                let native_class_rc = class.get_native_class(); // guarda o Rc
+                if native_class_rc.is_none() {
+                    return false;
+                }
+                let native_class_rc = native_class_rc.unwrap();
+                let native_class_ref = native_class_rc.borrow(); // faz o borrow depois
+                Self::mesma_struct_dyn(instance, &*native_class_ref)
+            }
+            Value::Object(ref_cell) => todo!(),
+            Value::Function(function) => todo!(),
+            Value::Class(class) => todo!(),
+            Value::Method(method) => todo!(),
+            Value::Instance(instance) => {
+                let inst = instance.borrow();
+                let mut current = Some(&inst.class);
 
-        let superclass = this.superclass.clone();
-        if superclass.is_none() {
-            return false;
-        }
-        let superclass = this.superclass.clone().unwrap().to_class().to_owned();
-        if Rc::ptr_eq(&superclass, other) {
-            return true;
-        }
+                while let Some(cls) = current {
+                    if class.is_native_class() {
+                        return false;
+                    }
+                    if Rc::ptr_eq(cls, &class.to_class()) {
+                        return true;
+                    }
 
-        false
+                    current = match &cls.superclass {
+                        Some(super_class) => Some(&super_class),
+                        None => None,
+                    };
+                }
+
+                false
+            }
+            Value::This(value) => todo!(),
+            Value::Builtin(_) => todo!(),
+            Value::NativeClass(ref_cell) => todo!(),
+            Value::NativeFunction(_) => todo!(),
+            Value::Internal(_) => todo!(),
+            Value::Expr(expr) => todo!(),
+        }
     }
 
-    pub fn is_instance_of2(instance: &Rc<RefCell<Instance>>, class: &Rc<Class>) -> bool {
-        let inst = instance.borrow();
-        let mut current = Some(&inst.class);
+    pub fn create_number() {
+        let class_name = "Number".to_string();
+        let methods: Vec<Rc<Method>> = vec![]; // Nenhum método por enquanto
+        let statics_methods: Vec<Rc<Method>> = vec![];
+        let superclass = None;
+        let instance_variables = HashMap::new();
+        let static_variables = HashMap::new();
+        let this_env = Environment::new_rc();
+        let closure = Environment::new_rc();
 
-        while let Some(cls) = current {
-            if Rc::ptr_eq(cls, class) {
-                return true;
-            }
-
-            current = match &cls.superclass {
-                Some(boxed) => match &**boxed {
-                    Value::Class(super_class) => Some(&super_class),
-                    _ => None,
-                },
-                None => None,
-            };
-        }
-
-        false
+        // Criar a classe
+        let number_class = Rc::new(Class::new(
+            class_name,
+            methods,
+            superclass,
+            this_env.clone(),
+            statics_methods,
+            instance_variables,
+            static_variables,
+            closure.clone(),
+        ));
     }
 }
 
@@ -428,6 +525,7 @@ impl Class {
 pub struct Function {
     pub name: String,
     pub params: Vec<String>,
+    pub vararg: Option<String>,
     pub body: Vec<Stmt>,
     pub environment: Rc<RefCell<Environment>>,
     pub prototype: Option<FunctionPrototype>,
@@ -449,6 +547,7 @@ impl Function {
     pub fn new(
         name: String,
         params: Vec<String>,
+        vararg: Option<String>,
         body: Vec<Stmt>,
         environment: Rc<RefCell<Environment>>,
         prototype: Option<FunctionPrototype>,
@@ -456,6 +555,7 @@ impl Function {
         Function {
             name,
             params,
+            vararg,
             body,
             environment,
             prototype,
@@ -479,6 +579,63 @@ impl Function {
             body.push_str(&format!("{stmt}\n"));
         }
         body
+    }
+
+    pub fn call(&self, mut args: Vec<Value>, mut interpreter: Interpreter) -> Value {
+        let env = interpreter.env.clone();
+        let name = &self.name;
+        let params = self.params.clone();
+        let body = &self.body;
+        let vararg = &self.vararg;
+
+        let is_initializer = name == "init";
+
+        let local_env = self.environment.borrow().clone().from_parent(env).to_rc();
+
+        for idx in 0..params.len() {
+            let param = params.get(idx).unwrap();
+            let val = args.remove(0);
+
+            local_env.borrow_mut().define(param.clone(), val);
+            // remove from param_value
+        }
+
+        if vararg.is_some() {
+            let vararg = vararg.as_ref().unwrap();
+            let vararg_name = vararg.clone();
+
+            let vararg_values = Value::array(args);
+            local_env.borrow_mut().define(vararg_name, vararg_values);
+        }
+
+        for stmt in body {
+            match interpreter.eval_stmt(stmt, local_env.clone()) {
+                ControlFlow::Return(_val) if is_initializer => {
+                    return local_env
+                        .borrow()
+                        .get("this")
+                        .unwrap_or(Value::Null)
+                        .clone();
+                }
+                ControlFlow::Return(val) => return val,
+                ControlFlow::Break => {
+                    panic!("Break not allowed in function {name}")
+                }
+                ControlFlow::Continue => {
+                    panic!("Continue not allowed in function {name}")
+                }
+                ControlFlow::None => {}
+            }
+        }
+
+        // if is_initializer {
+        //     return local_env
+        //         .borrow()
+        //         .get("this")
+        //         .unwrap_or(Value::Null)
+        //         .clone();
+        // }
+        Value::Void
     }
 }
 impl Value {
@@ -546,6 +703,7 @@ impl Value {
             Value::NativeClass(n) => Some(n.clone()),
             Value::Array(a) => Some(Rc::new(RefCell::new(a.clone()))),
             Value::String(s) => Some(Rc::new(RefCell::new(s.clone()))),
+            Value::Number(n) => Some(Rc::new(RefCell::new(n.clone()))),
             _ => None,
         }
     }
@@ -560,6 +718,12 @@ impl Value {
     pub fn is_class(&self) -> bool {
         match self {
             Value::Class(_) => true,
+            _ => false,
+        }
+    }
+    pub fn is_number(&self) -> bool {
+        match self {
+            Value::Number(_) => true,
             _ => false,
         }
     }
@@ -601,6 +765,18 @@ impl Value {
             _ => false,
         }
     }
+    pub fn is_function(&self) -> bool {
+        match self {
+            Value::Function(_) => true,
+            _ => false,
+        }
+    }
+    pub fn is_method(&self) -> bool {
+        match self {
+            Value::Method(_) => true,
+            _ => false,
+        }
+    }
     pub fn is_array(&self) -> bool {
         match self {
             Value::Array(_) => true,
@@ -637,7 +813,7 @@ impl Value {
             Value::Function { .. } => "function".to_string(),
             Value::Builtin(_) => "function".to_string(),
             Value::Class(_) => "class".to_string(),
-            Value::Instance { .. } => "instance".to_string(),
+            Value::Instance { .. } => "object".to_string(),
             Value::This(value) => value.type_of(),
             Value::Method(_) => "function".to_string(),
             Value::NativeClass(_) => "class".to_string(),
@@ -669,17 +845,45 @@ impl Value {
             Value::Builtin(_) => "<builtin>".to_string(),
             Value::Class(_) => "<class>".to_string(),
             Value::Instance(instance) => {
+                if let Some(method) = instance.borrow().get_to_string().as_ref() {
+                    let interpreter = Interpreter::new_empty();
+                    let method = method.clone();
+
+                    let new_method = Method::new(
+                        method.name.clone(),
+                        method.params.clone(),
+                        method.vararg.clone(),
+                        method.body.clone(),
+                        method.this.clone(),
+                        method.is_static.clone(),
+                        method.class.clone(),
+                        method.closure.clone(),
+                    );
+
+                    return new_method
+                        .with_this(Value::Instance(instance.clone()))
+                        .call(vec![], interpreter)
+                        .to_string();
+                }
+
+                let instance_vars = &instance.borrow().class.instance_variables;
                 let vars = instance.borrow().this.borrow().get_vars();
 
-                // get toString()
-                let to_string_method = vars.get("toString");
-                let method = to_string_method.unwrap();
-                let method = method.to_method();
-                return method.call(vec![], Interpreter::new_empty()).to_string();
+                // only json valid values
+                let vars = vars
+                    .iter()
+                    .filter(|(k, v)| {
+                        (v.is_primitive() || self.is_object() || self.is_array())
+                            && instance_vars.contains_key(k.as_str())
+                    })
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect::<HashMap<String, Value>>();
+
+                Value::Object(Rc::new(RefCell::new(vars))).to_string()
             }
             Value::This(value) => value.to_string(),
             Value::Method(_) => "<method>".to_string(),
-            Value::NativeClass(c) => format!("<class {}>", c.borrow().get_name()),
+            Value::NativeClass(c) => format!("<Native class {}>", c.borrow().get_name()),
             Value::NativeFunction(_) => "<function>".to_string(),
             _ => "unknown".to_string(),
         }
@@ -743,6 +947,7 @@ impl Value {
                     let new_method = Method::new(
                         method.name.clone(),
                         method.params.clone(),
+                        method.vararg.clone(),
                         method.body.clone(),
                         method.this.clone(),
                         method.is_static.clone(),
@@ -754,6 +959,7 @@ impl Value {
                         .with_this(Value::Instance(instance.clone()))
                         .call(vec![], interpreter);
                 }
+
                 let instance_vars = &instance.borrow().class.instance_variables;
                 let vars = instance.borrow().this.borrow().get_vars();
 
@@ -792,7 +998,10 @@ impl Value {
         }
     }
 
+    #[track_caller]
     pub fn to_number(&self) -> f64 {
+        // let caller = std::panic::Location::caller();
+        // let location = format!("{}:{}", caller.file(), caller.line());
         match self {
             Value::Number(n) => n.get_value(),
             Value::String(s) => {
@@ -807,7 +1016,18 @@ impl Value {
                     0.0
                 }
             }
-            _ => panic!("Cannot convert {} to number", self.type_of()),
+            _ => f64::NAN,
+        }
+    }
+
+    #[track_caller]
+    pub fn to_number_class(&self) -> NativeNumberClass {
+        // let caller = std::panic::Location::caller();
+        // let location = format!("{}:{}", caller.file(), caller.line());
+        match self {
+            Value::Number(n) => n.to_owned(),
+
+            _ => panic!("Not a number"),
         }
     }
 
@@ -823,11 +1043,18 @@ impl Value {
             _ => panic!("Cannot convert {} to object", self.type_of()),
         }
     }
+
+    #[track_caller]
     pub fn to_class(&self) -> Rc<Class> {
+        let caller = std::panic::Location::caller();
+        let location = format!("{}:{}", caller.file(), caller.line());
         match self {
             Value::Class(class) => Rc::clone(class),
             Value::Instance(instance) => instance.borrow().class.clone(),
-            _ => panic!("Cannot convert {} to class", self.type_of()),
+            _ => panic!(
+                "Cannot convert {} to class. called: {location}",
+                self.type_of()
+            ),
         }
     }
 

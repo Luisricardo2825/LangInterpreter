@@ -1,7 +1,11 @@
 pub mod native;
 pub mod stdlib;
 pub mod values;
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    rc::{Rc, Weak},
+};
 
 use stdlib::{
     array::NativeArrayClass, fs::fs::NativeFsClass, io::io::NativeIoClass,
@@ -11,12 +15,12 @@ use values::Value;
 
 #[derive(Clone, Debug)]
 pub struct Environment {
-    pub variables: HashMap<String, Value>,
-    pub parent: Option<Rc<RefCell<Environment>>>,
+    pub variables: Vec<(String, Value)>,
+    pub parent: Option<Weak<RefCell<Environment>>>,
 }
 
-fn global() -> HashMap<String, Value> {
-    let mut env: HashMap<String, Value> = HashMap::default();
+fn global() -> Vec<(String, Value)> {
+    let mut env: Vec<(String, Value)> = Vec::new();
 
     // env.insert(
     //     "print".to_string(),
@@ -102,7 +106,7 @@ fn global() -> HashMap<String, Value> {
     //     }),
     // );
 
-    env.insert(
+    env.push((
         "now".to_string(),
         Value::Builtin(|_args: Vec<Value>| {
             let now = std::time::SystemTime::now();
@@ -112,44 +116,42 @@ fn global() -> HashMap<String, Value> {
             let in_ms = since_the_epoch.as_millis();
             Value::Number((in_ms as f64).into())
         }),
-    );
+    ));
 
-    env.insert(
+    env.push((
         "Io".to_owned(),
         Value::NativeClass(Rc::new(RefCell::new(NativeIoClass::new()))),
-    );
-    env.insert(
+    ));
+    env.push((
         "Array".to_owned(),
         Value::NativeClass(Rc::new(RefCell::new(NativeArrayClass::new()))),
-    );
-    env.insert(
+    ));
+    env.push((
         "Fs".to_owned(),
         Value::NativeClass(Rc::new(RefCell::new(NativeFsClass::new()))),
-    );
-    env.insert(
+    ));
+    env.push((
         "Json".to_owned(),
         Value::NativeClass(Rc::new(RefCell::new(NativeJsonClass::new()))),
-    );
-    env.insert(
+    ));
+    env.push((
         "String".to_owned(),
         Value::NativeClass(Rc::new(RefCell::new(
             stdlib::string::NativeStringClass::new(),
         ))),
-    );
-    env.insert(
+    ));
+    env.push((
         "Number".to_owned(),
         Value::NativeClass(Rc::new(RefCell::new(
             stdlib::number::NativeNumberClass::new(),
         ))),
-    );
+    ));
     env
 }
 
 impl Environment {
     pub fn new() -> Self {
         let global = global();
-        // let io = io::io();
-        // global.extend(io);
         Environment {
             variables: global,
             parent: None,
@@ -166,15 +168,15 @@ impl Environment {
 
     pub fn new_enclosed(parent: Rc<RefCell<Environment>>) -> Self {
         Environment {
-            variables: HashMap::new(),
-            parent: Some(parent),
+            variables: global(),
+            parent: Some(Rc::downgrade(&parent)),
         }
     }
 
     pub fn new_rc_enclosed(parent: Rc<RefCell<Environment>>) -> Rc<RefCell<Environment>> {
         Rc::new(RefCell::new(Environment {
             variables: global(),
-            parent: Some(parent),
+            parent: Some(Rc::downgrade(&parent)),
         }))
     }
 
@@ -186,7 +188,7 @@ impl Environment {
     pub fn rc_enclosed(&self, parent: Rc<RefCell<Environment>>) -> Rc<RefCell<Environment>> {
         Rc::new(RefCell::new(Environment {
             variables: global(),
-            parent: Some(parent),
+            parent: Some(Rc::downgrade(&parent)),
         }))
     }
 
@@ -195,12 +197,18 @@ impl Environment {
     }
 
     pub fn exist_in_current_scope(&self, name: &str) -> bool {
-        self.variables.contains_key(name)
+        self.variables.iter().any(|(n, _)| n == name)
+    }
+
+    fn get_parent(&self) -> Option<Rc<RefCell<Environment>>> {
+        self.parent
+            .as_ref()
+            .and_then(|weak_parent| weak_parent.upgrade()) // Tentar obter Rc de Weak
     }
     pub fn get(&self, name: &str) -> Option<Value> {
-        if self.variables.contains_key(name) {
-            Some(self.variables.get(name).unwrap().clone())
-        } else if let Some(parent) = &self.parent {
+        if let Some((_, v)) = self.variables.iter().find(|(n, _)| n == name) {
+            Some(v.clone())
+        } else if let Some(parent) = self.get_parent() {
             parent.borrow().get(name)
         } else {
             None
@@ -211,16 +219,27 @@ impl Environment {
         self.variables.clear();
     }
 
-    pub fn define(&mut self, name: String, value: Value) {
-        self.variables.insert(name, value);
+    const RESERVED: &[&str] = &["Number", "String", "Boolean", "Array", "Object", "Function"];
+
+    fn is_reserved(name: &str) -> bool {
+        Self::RESERVED.contains(&name)
     }
 
-    #[track_caller]
+    pub fn define(&mut self, name: String, value: Value) {
+        if Environment::is_reserved(&name) {
+            panic!("Cannot define reserved word '{}'", name);
+        }
+        match self.variables.iter_mut().find(|(n, _)| n == &name) {
+            Some((_, v)) => *v = value,
+            None => self.variables.push((name, value)),
+        }
+    }
+
     pub fn assign(&mut self, name: &str, value: Value) -> Result<(), String> {
-        if self.variables.contains_key(name) {
-            self.variables.insert(name.to_string(), value);
+        if let Some((_, v)) = self.variables.iter_mut().find(|(n, _)| n == name) {
+            *v = value;
             Ok(())
-        } else if let Some(parent) = &self.parent {
+        } else if let Some(parent) = self.get_parent() {
             parent.borrow_mut().assign(name, value)
         } else {
             Err(format!("Variable '{}' not defined", name))
@@ -228,7 +247,10 @@ impl Environment {
     }
 
     pub fn exist(&self, name: &str) -> bool {
-        self.variables.contains_key(name)
+        self.variables.iter().any(|(n, _)| n == name)
+            || self
+                .get_parent()
+                .map_or(false, |parent| parent.borrow().exist(name))
     }
 
     pub fn merge(&mut self, other: Environment) {
@@ -238,14 +260,14 @@ impl Environment {
     pub fn from_parent(&mut self, parent: Rc<RefCell<Environment>>) -> Environment {
         Environment {
             variables: self.variables.to_owned(),
-            parent: Some(parent),
+            parent: Some(Rc::downgrade(&parent)),
         }
     }
 
     pub fn to_rc(&self) -> Rc<RefCell<Environment>> {
         Rc::new(RefCell::new(self.clone()))
     }
-    pub fn get_vars(&self) -> HashMap<String, Value> {
+    pub fn get_vars(&self) -> Vec<(String, Value)> {
         self.variables.clone()
     }
 
@@ -257,9 +279,9 @@ impl Environment {
 
         serde_json::to_string(&vars).unwrap()
     }
-    pub fn get_vars_from_parent(&self) -> HashMap<String, Value> {
+    pub fn get_vars_from_parent(&self) -> Vec<(String, Value)> {
         let mut vars = self.variables.clone();
-        if let Some(parent) = &self.parent {
+        if let Some(parent) = self.get_parent() {
             vars.extend(parent.borrow().get_vars_from_parent());
         }
         vars

@@ -1,9 +1,9 @@
-use std::{
-    fmt::Display,
-    ops::{Add, Sub},
-};
+use std::fmt::Display;
 
-use crate::environment::{native::native_callable::NativeCallable, values::Value};
+use crate::{
+    environment::{native::native_callable::NativeCallable, values::Value},
+    impl_from_for_class, impl_logical_operations, impl_math_operations,
+};
 
 #[derive(Debug, Clone)]
 pub struct NativeNumberClass {
@@ -64,62 +64,15 @@ impl NativeNumberClass {
     }
 }
 
-impl Add<&NativeNumberClass> for NativeNumberClass {
-    type Output = NativeNumberClass;
+impl_math_operations!(NativeNumberClass);
 
-    fn add(self, rhs: &NativeNumberClass) -> Self::Output {
-        let mut value = self.get_value();
-        value += rhs.get_value();
-        NativeNumberClass::new_with_value(value)
-    }
-}
-impl Add<NativeNumberClass> for &NativeNumberClass {
-    type Output = NativeNumberClass;
+impl_from_for_class!(
+    [f64, i32, i64, u32, u64, isize, usize],
+    f64,
+    NativeNumberClass
+);
 
-    fn add(self, rhs: NativeNumberClass) -> Self::Output {
-        let mut value = self.get_value();
-        value += rhs.get_value();
-        NativeNumberClass::new_with_value(value)
-    }
-}
-impl Add<&NativeNumberClass> for &NativeNumberClass {
-    type Output = NativeNumberClass;
-
-    fn add(self, rhs: &NativeNumberClass) -> Self::Output {
-        let mut value = self.get_value();
-        value += rhs.get_value();
-        NativeNumberClass::new_with_value(value)
-    }
-}
-impl Sub<&NativeNumberClass> for NativeNumberClass {
-    type Output = NativeNumberClass;
-
-    fn sub(self, rhs: &NativeNumberClass) -> Self::Output {
-        let mut value = self.get_value();
-        value -= rhs.get_value();
-        NativeNumberClass::new_with_value(value)
-    }
-}
-impl Sub<NativeNumberClass> for &NativeNumberClass {
-    type Output = NativeNumberClass;
-
-    fn sub(self, rhs: NativeNumberClass) -> Self::Output {
-        let mut value = self.get_value();
-        value -= rhs.get_value();
-        NativeNumberClass::new_with_value(value)
-    }
-}
-
-impl From<f64> for NativeNumberClass {
-    fn from(value: f64) -> Self {
-        Self::new_with_value(value)
-    }
-}
-impl From<&f64> for NativeNumberClass {
-    fn from(value: &f64) -> Self {
-        Self::new_with_value(*value)
-    }
-}
+impl_logical_operations!(NativeNumberClass, NativeNumberClass);
 
 impl Display for NativeNumberClass {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -127,11 +80,6 @@ impl Display for NativeNumberClass {
     }
 }
 
-impl PartialEq for NativeNumberClass {
-    fn eq(&self, other: &Self) -> bool {
-        self.value == other.value
-    }
-}
 impl NativeCallable for NativeNumberClass {
     fn call(&self, method_name: &str) -> Result<Value, String> {
         let mut args = self.get_args();
@@ -144,8 +92,8 @@ impl NativeCallable for NativeNumberClass {
 
                 if args.len() != num_of_args {
                     return Err(format!(
-                        "Método nativo '{method_name}' esperava {num_of_args} argumentos, mas recebeu {}",
-                        args.len()
+                        "Método nativo '{method_name}' esperava {num_of_args} argumentos, mas recebeu {} {:?}",
+                        args.len(),args
                     ));
                 }
                 let arg = self.get_this();
@@ -183,7 +131,15 @@ impl NativeCallable for NativeNumberClass {
         self.args.extend(args);
         Ok(())
     }
+    fn add_arg(&mut self, arg: Value) -> Result<(), String> {
+        self.args.push(arg);
+        Ok(())
+    }
 
+    fn set_args(&mut self, args: Vec<Value>) -> Result<(), String> {
+        self.args = args;
+        Ok(())
+    }
     fn instantiate(&self, args: Vec<Value>) -> Result<Value, String> {
         if args.len() != 1 {
             return Err(format!(
@@ -205,6 +161,7 @@ pub struct MethodInfo {
     pub num_of_args: usize,
     pub is_static: bool,
 }
+
 impl MethodInfo {
     pub fn new(name: &str, num_of_args: usize, is_static: bool) -> Self {
         Self {

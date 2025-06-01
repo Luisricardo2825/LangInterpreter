@@ -211,6 +211,57 @@ pub enum Token {
     Unknown(String),
 }
 
+impl Token {
+    pub fn to_string(&self) -> String {
+        match self {
+            Token::Identifier(id) => id.to_string(),
+            Token::Number(n) => n.to_string(),
+            Token::Bool(b) => b.to_string(),
+            Token::String(s) => s.to_string(),
+            Token::Null => "null".to_string(),
+            Token::AddAssign => "+=".to_string(),
+            Token::SubAssign => "-=".to_string(),
+            Token::MulAssign => "*=".to_string(),
+            Token::DivAssign => "/=".to_string(),
+            Token::ModAssign => "%=".to_string(),
+            Token::PowAssign => "**=".to_string(),
+            Token::Assign => "=".to_string(),
+            Token::Plus => "+".to_string(),
+            Token::Minus => "-".to_string(),
+            Token::Asterisk => "*".to_string(),
+            Token::Slash => "/".to_string(),
+            Token::Ellipsis => "...".to_string(),
+            Token::Arrow => "->".to_string(),
+            Token::Dot => ".".to_string(),
+            Token::FatArrow => "=>".to_string(),
+            Token::Increment => "++".to_string(),
+            Token::Decrement => "--".to_string(),
+            Token::Exponentiation => "^".to_string(),
+            Token::Modulo => "%".to_string(),
+            Token::ParenOpen => "(".to_string(),
+            Token::ParenClose => ")".to_string(),
+            Token::BraceOpen => "{".to_string(),
+            Token::BraceClose => "}".to_string(),
+            Token::BracketOpen => "[".to_string(),
+            Token::BracketClose => "]".to_string(),
+            Token::Comma => ",".to_string(),
+            Token::Colon => ":".to_string(),
+            Token::And => "&&".to_string(),
+            Token::Or => "||".to_string(),
+            Token::Not => "!".to_string(),
+            Token::Equal => "==".to_string(),
+            Token::NotEqual => "!=".to_string(),
+            Token::Less => "<".to_string(),
+            Token::LessEqual => "<=".to_string(),
+            Token::Greater => ">".to_string(),
+            Token::GreaterEqual => ">=".to_string(),
+            Token::Comment => "//".to_string(),
+            Token::CommentMultiline => "/* */".to_string(),
+            Token::Semicolon => ";".to_string(),
+            Token::Unknown(id) => id.to_string(),
+        }
+    }
+}
 fn parse_error(lex: &mut Lexer<Token>) -> String {
     let id = lex.slice().to_string();
     id

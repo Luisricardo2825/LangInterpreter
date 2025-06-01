@@ -115,7 +115,7 @@ function getMonth(timestamp) {
     }
     month = month + 1;
 
-    let formatedMonth = ""
+    let formatedMonth = "";
     if (month < 10) {
         formatedMonth = "0" + month;
     } else {
@@ -147,7 +147,9 @@ function getYear(timestamp) {
 export class Date {
     time = now();
     constructor(time) {
-        this.time = time;
+        if (time != null) {
+            this.time = time;
+        }
     }
     static now() {
         return now();
@@ -161,7 +163,7 @@ export class Date {
     getYear() {
         return getYear(this.time);
     }
-    
+
     toString() {
         return this.getDayOfMonth() + "/" + this.getMonth() + "/" + this.getYear();
     }

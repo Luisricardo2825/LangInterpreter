@@ -1,15 +1,5 @@
-let msg = "Esse é o nome externo";
+import { Date } from "./examples/classes/Date.x";
 
-function getName() {
-    return msg;
-}
-class Teste {
-    msg = "Esse é o nome interno";
+let data = new Date();
 
-    getName(msg) {
-        return msg;
-    }
-}
-
-let obj = new Teste();
-Io.println(obj.getName("teste"), getName());
+Io.println(data.toString());

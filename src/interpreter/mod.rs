@@ -172,7 +172,31 @@ impl Interpreter {
                 value
             }
             Expr::Literal(lit) => match lit {
-                Literal::Number(n) => Value::Number(n.into()),
+                Literal::Number(n) => {
+                    let class_name = "Number";
+                    let native = env
+                        .borrow()
+                        .get(class_name)
+                        .expect(&format!("Class '{}' not found", class_name));
+                    let args: Vec<Value<String>> = vec![Value::Number(n.into())];
+
+                    match native {
+                        Value::NativeClass(native) => {
+                            let mut instance = native.borrow_mut();
+                            // println!("Args: {:?}", args);
+                            instance.set_args(args).unwrap();
+                            let value = instance.call("valueOf").unwrap();
+
+                            return value;
+                        }
+                        Value::Class(class) => {
+                            let instance = Class::instantiate(&class, args, self.clone());
+
+                            return instance;
+                        }
+                        _ => panic!("Number not found"),
+                    }
+                }
                 Literal::Bool(b) => Value::Bool(*b),
                 Literal::String(s) => Value::String(s.clone().into()),
                 Literal::Null => Value::Null,
@@ -263,28 +287,32 @@ impl Interpreter {
                             Value::Number((left.to_number() % right.to_number()).into())
                         }
                     },
-
-                    (Operator::Compare(comp_op), Value::Number(a), Value::Number(b)) => {
-                        match comp_op {
-                            CompareOperator::Eq => Value::Bool(a == b),
-                            CompareOperator::Ne => Value::Bool(a != b),
-                            CompareOperator::Gt => Value::Bool(a.get_value() > b.get_value()),
-                            CompareOperator::Ge => Value::Bool(a.get_value() >= b.get_value()),
-                            CompareOperator::Lt => Value::Bool(a.get_value() < b.get_value()),
-                            CompareOperator::Le => Value::Bool(a.get_value() <= b.get_value()),
-                            _ => panic!("Invalid comparison operator for numbers: {:?}", comp_op),
-                        }
-                    }
-                    (
-                        Operator::Compare(comp_op),
-                        Value::Instance(instance),
-                        Value::Class(class),
-                    ) => match comp_op {
+                    // (
+                    //     Operator::Compare(comp_op),
+                    //     Value::Instance(instance),
+                    //     Value::Class(class),
+                    // ) => match comp_op {
+                    //     CompareOperator::InstanceOf => {
+                    //         return Value::Bool(Class::is_instance_of(
+                    //             &Value::Instance(instance),
+                    //             &Value::Class(class),
+                    //         ));
+                    //     }
+                    //     _ => Value::Bool(false),
+                    // },
+                    (Operator::Compare(comp_op), a, b) => match comp_op {
+                        CompareOperator::Eq => Value::Bool(a == b),
+                        CompareOperator::Ne => Value::Bool(a != b),
+                        CompareOperator::Gt => Value::Bool(a > b),
+                        CompareOperator::Ge => Value::Bool(a >= b),
+                        CompareOperator::Lt => Value::Bool(a < b),
+                        CompareOperator::Le => Value::Bool(a <= b),
                         CompareOperator::InstanceOf => {
-                            return Value::Bool(Class::is_instance_of2(&instance, &class));
+                            return Value::Bool(Class::is_instance_of(&a, &b));
                         }
-                        _ => Value::Bool(false),
+                        _ => panic!("Invalid comparison operator for numbers: {:?}", comp_op),
                     },
+
                     (Operator::Compare(comp_op), a, b) => match comp_op {
                         CompareOperator::Eq => Value::Bool(a.equal(&b)),
 
@@ -376,57 +404,37 @@ impl Interpreter {
             Expr::Call { callee, args } => {
                 let evaluated_callee = self.eval_expr(callee, env.clone());
 
-                let arg_values: Vec<_> = args
-                    .iter()
-                    .map(|arg| self.eval_expr(arg, env.clone()))
-                    .collect();
+                let mut evaluated_args = vec![];
 
-                match evaluated_callee {
-                    Value::Function(func) => {
-                        let name = &func.name;
-                        let params = &func.params;
-                        let body = &func.body;
-
-                        let is_initializer = name == "init";
-
-                        let local_env = func.environment.borrow().clone().from_parent(env).to_rc();
-
-                        for (param, val) in params.iter().zip(arg_values) {
-                            local_env.borrow_mut().define(param.clone(), val);
-                        }
-
-                        for stmt in body {
-                            match self.eval_stmt(stmt, local_env.clone()) {
-                                ControlFlow::Return(_val) if is_initializer => {
-                                    return local_env
-                                        .borrow()
-                                        .get("this")
-                                        .unwrap_or(Value::Null)
-                                        .clone();
+                for arg_expr in args {
+                    match arg_expr {
+                        Expr::Spread(inner_expr) => {
+                            let val = self.eval_expr(&inner_expr, env.clone());
+                            match val {
+                                Value::Array(arr) => {
+                                    let arr = arr.get_value().clone();
+                                    evaluated_args.extend(arr.borrow().clone());
                                 }
-                                ControlFlow::Return(val) => return val,
-                                ControlFlow::Break => {
-                                    panic!("Break not allowed in function {name}")
+                                Value::Object(map) => {
+                                    let map = map.borrow().clone();
+                                    for (_, v) in map {
+                                        evaluated_args.push(v);
+                                    }
                                 }
-                                ControlFlow::Continue => {
-                                    panic!("Continue not allowed in function {name}")
-                                }
-                                ControlFlow::None => {}
+                                _ => panic!("Cannot spread {:?}", val.type_of()),
                             }
                         }
-
-                        if is_initializer {
-                            return local_env
-                                .borrow()
-                                .get("this")
-                                .unwrap_or(Value::Null)
-                                .clone();
+                        _ => {
+                            evaluated_args.push(self.eval_expr(&arg_expr, env.clone()));
                         }
-                        Value::Null
                     }
-                    Value::Method(method) => method.call(arg_values, self.clone()),
+                }
 
-                    Value::Builtin(func) => func(arg_values),
+                match evaluated_callee {
+                    Value::Function(func) => func.call(evaluated_args, self.clone()),
+                    Value::Method(method) => method.call(evaluated_args, self.clone()),
+
+                    Value::Builtin(func) => func(evaluated_args),
                     Value::NativeFunction((name, native_class)) => {
                         let mut new_args = native_class.borrow().get_args();
                         let is_static = native_class.borrow().is_static();
@@ -434,31 +442,219 @@ impl Interpreter {
                         if is_static {
                             return native_class
                                 .borrow()
-                                .call_with_args(&name, arg_values)
+                                .call_with_args(&name, evaluated_args)
                                 .unwrap();
                         }
                         // concat new_args and arg_values
-                        new_args.extend(arg_values);
+                        new_args.extend(evaluated_args.clone());
 
                         native_class.borrow_mut().add_args(new_args).unwrap();
 
-                        native_class.borrow().call(&name).unwrap()
+                        let native_method = native_class.borrow().call(&name);
+                        if native_method.is_ok() {
+                            return native_method.unwrap();
+                        }
+                        let val = native_class.borrow().get_custom_method(&name).unwrap();
+
+                        match val {
+                            Value::Function(function) => {
+                                function.call(evaluated_args, self.clone())
+                            }
+                            Value::Method(method) => method.call(evaluated_args, self.clone()),
+                            _ => val,
+                        }
                     }
                     _ => panic!("'{}' is not a function", self.resolve_calle_name(callee)),
                 }
             }
-            Expr::Assign {
-                target,
-                op: _,
-                value,
-            } => {
+            Expr::Assign { target, op, value } => {
                 let val = self.eval_expr(value, env.clone());
 
                 match &**target {
                     Expr::Identifier(name) => {
                         // atribuição simples
                         let mut env_mut = env.borrow_mut();
-                        env_mut.assign(name, val.clone()).unwrap();
+                        match op {
+                            crate::ast::ast::AssignOperator::Assign => {
+                                env_mut.assign(name, val.clone()).unwrap();
+                            }
+                            crate::ast::ast::AssignOperator::AddAssign => {
+                                let old_value = env_mut.get(name);
+                                let old_value = old_value.unwrap_or(Value::Null);
+                                let new_value = val;
+
+                                match (&old_value, &new_value) {
+                                    (Value::Number(a), Value::Number(b)) => {
+                                        env_mut
+                                            .assign(name, Value::Number((a + b).into()))
+                                            .unwrap();
+                                    }
+                                    (Value::String(a), Value::String(b)) => {
+                                        env_mut
+                                            .assign(name, Value::String((a + b).into()))
+                                            .unwrap();
+                                    }
+                                    (Value::Array(a), Value::Array(b)) => {
+                                        let a = a.get_value();
+                                        let mut a = a.borrow_mut();
+                                        let b = b.get_value();
+                                        let b = b.borrow();
+                                        a.extend(b.clone());
+                                    }
+                                    (Value::Number(a), Value::String(b)) => {
+                                        env_mut
+                                            .assign(
+                                                name,
+                                                Value::String(
+                                                    (a.to_string() + &b.get_value()).into(),
+                                                ),
+                                            )
+                                            .unwrap();
+                                    }
+                                    (a, b) => {
+                                        env_mut
+                                            .assign(
+                                                name,
+                                                Value::String(
+                                                    (a.to_string() + &b.to_string()).into(),
+                                                ),
+                                            )
+                                            .unwrap();
+                                    }
+                                    _ => panic!(
+                                        "Invalid operation: {:?} {} {:?}",
+                                        old_value.type_of(),
+                                        op,
+                                        new_value.type_of()
+                                    ),
+                                }
+                            }
+                            crate::ast::ast::AssignOperator::SubAssign => {
+                                let old_value = env_mut.get(name);
+                                let old_value = old_value.unwrap_or(Value::Null);
+                                let new_value = val;
+                                match (&old_value, &new_value) {
+                                    (Value::Number(a), Value::Number(b)) => {
+                                        env_mut
+                                            .assign(name, Value::Number((a - b).into()))
+                                            .unwrap();
+                                    }
+                                    (a, b) => {
+                                        env_mut
+                                            .assign(
+                                                name,
+                                                Value::Number(
+                                                    (a.to_number() - b.to_number()).into(),
+                                                ),
+                                            )
+                                            .unwrap();
+                                    }
+
+                                    _ => panic!(
+                                        "Invalid operation: {:?} {} {:?}",
+                                        old_value.type_of(),
+                                        op,
+                                        new_value.type_of()
+                                    ),
+                                }
+                            }
+                            crate::ast::ast::AssignOperator::MulAssign => {
+                                let old_value = env_mut.get(name);
+                                let old_value = old_value.unwrap_or(Value::Null);
+                                let new_value = val;
+
+                                match (&old_value, &new_value) {
+                                    (a, b) => {
+                                        env_mut
+                                            .assign(
+                                                name,
+                                                Value::Number(
+                                                    (a.to_number() * b.to_number()).into(),
+                                                ),
+                                            )
+                                            .unwrap();
+                                    }
+                                    _ => panic!(
+                                        "Invalid operation: {:?} {} {:?}",
+                                        old_value.type_of(),
+                                        op,
+                                        new_value.type_of()
+                                    ),
+                                }
+                            }
+                            crate::ast::ast::AssignOperator::DivAssign => {
+                                let old_value = env_mut.get(name);
+                                let old_value = old_value.unwrap_or(Value::Null);
+                                let new_value = val;
+
+                                match (&old_value, &new_value) {
+                                    (a, b) => {
+                                        env_mut
+                                            .assign(
+                                                name,
+                                                Value::Number(
+                                                    (a.to_number() / b.to_number()).into(),
+                                                ),
+                                            )
+                                            .unwrap();
+                                    }
+                                    _ => panic!(
+                                        "Invalid operation: {:?} {} {:?}",
+                                        old_value.type_of(),
+                                        op,
+                                        new_value.type_of()
+                                    ),
+                                }
+                            }
+                            crate::ast::ast::AssignOperator::ModAssign => {
+                                let old_value = env_mut.get(name);
+                                let old_value = old_value.unwrap_or(Value::Null);
+                                let new_value = val;
+
+                                match (&old_value, &new_value) {
+                                    (a, b) => {
+                                        env_mut
+                                            .assign(
+                                                name,
+                                                Value::Number(
+                                                    (a.to_number() % b.to_number()).into(),
+                                                ),
+                                            )
+                                            .unwrap();
+                                    }
+                                    _ => panic!(
+                                        "Invalid operation: {:?} {} {:?}",
+                                        old_value.type_of(),
+                                        op,
+                                        new_value.type_of()
+                                    ),
+                                }
+                            }
+                            crate::ast::ast::AssignOperator::PowAssign => {
+                                let old_value = env_mut.get(name);
+                                let old_value = old_value.unwrap_or(Value::Null);
+                                let new_value = val;
+
+                                match (&old_value, &new_value) {
+                                    (a, b) => {
+                                        env_mut
+                                            .assign(
+                                                name,
+                                                Value::Number(
+                                                    (a.to_number().powf(b.to_number())).into(),
+                                                ),
+                                            )
+                                            .unwrap();
+                                    }
+                                    _ => panic!(
+                                        "Invalid operation: {:?} {} {:?}",
+                                        old_value.type_of(),
+                                        op,
+                                        new_value.type_of()
+                                    ),
+                                }
+                            }
+                        }
                     }
                     Expr::GetProperty { object, property } => {
                         // atribuição a propriedade: obj.prop = val
@@ -475,6 +671,9 @@ impl Interpreter {
 
                             Value::Instance(instance) => {
                                 instance.borrow_mut().set(&key, val.clone());
+                            }
+                            Value::NativeClass(class) => {
+                                class.borrow_mut().add_custom_method(key, val).unwrap();
                             }
                             _ => panic!("Não é um objeto {:?}", obj),
                         }
@@ -561,7 +760,7 @@ impl Interpreter {
                         let prop = prop.get_value();
 
                         let msg = format!("Property {prop} not found");
-                        todo!("Entrou aqui {prop} {msg}");
+                        todo!("A fazer {prop} {msg}");
                     }
                     _ => {
                         panic!(
@@ -666,36 +865,54 @@ impl Interpreter {
                 }
                 Value::Void
             }
-            Expr::New { class_name, args } => {
+            Expr::New { class_expr } => {
+                let empty_args: Vec<Expr> = vec![];
+                // Se for uma chamada, separa callee e args
+                let (class_callee, args) = match &**class_expr {
+                    Expr::Call { callee, args } => (callee, args),
+                    Expr::Identifier(name) => {
+                        let callee = Expr::Identifier(name.clone());
+                        (&Box::new(callee), &empty_args)
+                    }
+                    _ => panic!("Expected a call expression after 'new'"),
+                };
+
+                // Avalia os argumentos
                 let arg_values: Vec<_> = args
                     .iter()
                     .map(|arg| self.eval_expr(arg, env.clone()))
                     .collect();
 
-                let value = env
-                    .borrow()
-                    .get(class_name)
-                    .expect(&format!("Class '{}' not found", class_name));
+                // Avalia o callee (pode ser Identifier, MemberAccess, etc.)
+                let value = self.eval_expr(class_callee, env.clone());
 
                 match value {
                     Value::Class(class) => {
                         let mut interpreter = self.clone();
                         let closure = class.closure.clone();
-                        // println!("Env: {:?}", closure.borrow().get_vars_name_value());
+                        // println!("Instanciando: {}", &class.name);
                         interpreter.env = closure;
                         let instance = Class::instantiate(&class, arg_values, interpreter);
 
                         return instance;
                     }
                     Value::NativeClass(native) => {
-                        let instance = native.borrow().instantiate(arg_values).unwrap();
+                        let instance = native.borrow_mut().instantiate(arg_values).unwrap();
 
                         return instance;
                     }
-                    _ => panic!("'{}' is not a class. {}", class_name, value.type_of()),
+                    _ => panic!("Cannot instantiate non-class value: {}", value.type_of()),
                 }
             }
-            Expr::This => env.borrow().get("this").unwrap_or(Value::Null),
+            Expr::This => {
+                let this = env.borrow().get("this").unwrap_or(Value::Void);
+                // if this.is_void() {
+                //     let this = env.borrow().get_vars();
+                //     return Value::object(this);
+                // }
+                this
+            }
+            Expr::Spread(expr) => Value::Expr(expr.as_ref().clone()),
             _ => {
                 todo!("Cannot evaluate expression: {:?}", expr)
             }
@@ -714,10 +931,16 @@ impl Interpreter {
                 env.borrow_mut().define(name, val);
                 ControlFlow::None
             }
-            Stmt::FuncDecl(FunctionStmt { name, params, body }) => {
+            Stmt::FuncDecl(FunctionStmt {
+                name,
+                params,
+                vararg,
+                body,
+            }) => {
                 let mut function = Function {
                     name: name.clone(),
                     params: params.clone(),
+                    vararg: vararg.clone(),
                     body: body.clone(),
                     environment: Environment::new_rc_enclosed(env.clone()),
                     prototype: None,
@@ -882,6 +1105,17 @@ impl Interpreter {
                             .collect();
                         Box::new(keys_and_values.into_iter())
                     }
+                    Value::Array(arr) => {
+                        let indices_and_values: Vec<_> = arr
+                            .get_value()
+                            .borrow()
+                            .clone()
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, v)| Value::array(vec![Value::Number(i.into()), v]))
+                            .collect();
+                        Box::new(indices_and_values.into_iter())
+                    }
                     _ => panic!("Expected object in for-in"),
                 };
 
@@ -928,9 +1162,58 @@ impl Interpreter {
                     None
                 };
 
-                // Construção do mapa de métodos
+                let mut instance_variables = HashMap::new();
 
+                let instace_env = Environment::new_rc();
                 let static_method_env = Environment::new_rc();
+
+                let mut super_class_static_methods = vec![];
+                let mut super_class_methods = vec![];
+
+                if super_class_value.is_some() {
+                    let super_class = super_class_value.clone().unwrap();
+
+                    for method in super_class.static_methods.clone() {
+                        let method = Method::new(
+                            method.name.clone(),
+                            method.params.clone(),
+                            method.vararg.clone(),
+                            method.body.clone(),
+                            Rc::clone(&static_method_env),
+                            method.is_static,
+                            name.clone(),
+                            env.clone(),
+                        );
+                        super_class_static_methods.push(Rc::new(method));
+                    }
+                    for method in super_class.methods.clone() {
+                        let mut method_name = method.name.clone();
+
+                        if method_name == "constructor" {
+                            method_name = "super".to_owned();
+                        }
+                        let method = Method::new(
+                            method_name,
+                            method.params.clone(),
+                            method.vararg.clone(),
+                            method.body.clone(),
+                            Rc::clone(&instace_env),
+                            method.is_static,
+                            name.clone(),
+                            env.clone(),
+                        );
+
+                        super_class_methods.push(Rc::new(method));
+                    }
+
+                    for (field_name, value) in super_class.instance_variables.clone() {
+                        instance_variables.insert(field_name.to_owned(), value.clone());
+                        instace_env
+                            .borrow_mut()
+                            .define(field_name.to_owned(), value);
+                    }
+                }
+
                 let mut static_variables = HashMap::new();
                 // // Avaliar e definir campos estáticos no ambiente da classe
                 for (field_name, initializer) in static_fields {
@@ -942,8 +1225,6 @@ impl Interpreter {
                 }
 
                 // Avaliar valores iniciais dos campos de instância (armazenados para uso em `instantiate`)
-                let mut instance_variables = HashMap::new();
-                let instace_env = Environment::new_rc();
                 for (field_name, initializer) in instance_fields {
                     let value = self.eval_expr(initializer, Rc::clone(&class_env));
                     instance_variables.insert(field_name.to_owned(), value.clone());
@@ -952,14 +1233,7 @@ impl Interpreter {
                         .define(field_name.to_owned(), value);
                 }
 
-                // TODO: Implementar a classe "pai" corretamente
-                if super_class_value.is_some() {
-                    instace_env.borrow_mut().define(
-                        "super".to_string(),
-                        Value::Class(super_class_value.clone().unwrap()),
-                    );
-                }
-
+                let mut is_constructor_declared = false;
                 let mut method_array: Vec<Rc<Method>> = vec![];
                 let mut static_method_array: Vec<Rc<Method>> = vec![];
                 for method in methods {
@@ -967,6 +1241,7 @@ impl Interpreter {
                         let method = Method::new(
                             method.name.clone(),
                             method.params.clone(),
+                            method.vararg.clone(),
                             method.body.clone(),
                             Rc::clone(&static_method_env),
                             method.is_static,
@@ -976,9 +1251,17 @@ impl Interpreter {
 
                         static_method_array.push(Rc::new(method))
                     } else {
+                        let method_name = method.name.clone();
+                        if method_name == "constructor" {
+                            if is_constructor_declared {
+                                panic!("Only one constructor can be declared");
+                            }
+                            is_constructor_declared = true;
+                        }
                         let method = Method::new(
-                            method.name.clone(),
+                            method_name,
                             method.params.clone(),
+                            method.vararg.clone(),
                             method.body.clone(),
                             instace_env.clone(),
                             method.is_static,
@@ -990,17 +1273,20 @@ impl Interpreter {
                 }
 
                 let super_class = if let Some(super_class) = super_class_value {
-                    Some(Box::new(Value::Class(super_class)))
+                    Some(super_class)
                 } else {
                     None
                 };
 
+                // add super statics to static_method_array
+                static_method_array.extend(super_class_static_methods);
+                method_array.extend(super_class_methods);
                 let class = Class {
                     name: name.clone(),
                     superclass: super_class,
 
                     methods: method_array,
-                    statics_methods: static_method_array,
+                    static_methods: static_method_array,
 
                     this: Rc::clone(&instace_env),
                     instance_variables,
@@ -1098,8 +1384,9 @@ impl Interpreter {
                 let loop_env = Environment::new_rc_enclosed(env);
 
                 while self.eval_expr(condition, Rc::clone(&loop_env)).is_truthy() {
+                    // let loop_env = Rc::clone(&loop_env);
                     for stmt in body.iter() {
-                        match self.eval_stmt(stmt, loop_env.clone()) {
+                        match self.eval_stmt(stmt, Rc::clone(&loop_env)) {
                             ControlFlow::Return(v) => return ControlFlow::Return(v),
                             ControlFlow::Break => return ControlFlow::None,
                             ControlFlow::Continue => break,
@@ -1139,11 +1426,7 @@ impl Interpreter {
         let export_only_env = Environment::new_rc();
         for (name, value) in &self.exported_symbols {
             if let Some(val) = module_env.borrow().get(name) {
-                let value = if value.is_null() {
-                    val.clone()
-                } else {
-                    value.clone()
-                };
+                let value = if value.is_null() { val } else { value.clone() };
                 export_only_env.borrow_mut().define(name.clone(), value);
             }
         }

@@ -1,13 +1,10 @@
-let max = new Number(Io.readln("Digite até onde será contado:", 10));
-
-let stopAt = new Number(Io.readln("Digite um para parar:", 10));
+let max = 100_000;
 let count = 0;
-while (count <= max) {
-    Io.println("Count esta em:", count);
-    count = count + 1;
-    if (count == stopAt) {
-        Io.println("Break. Count esta em:", count);
-        break;
-    }
+while (count < max) {
+    count++;
 }
-Io.println("Finalizado");
+Io.println("Finalizado", count);
+
+// Leva cerca de 1,7 minutos para iterar sobre 10 milhoes
+// 100 milhoes leva cerca de 12 minutos :O
+// 1 bilhão é inviavel, pois deve levar cerca de 2 horas :O

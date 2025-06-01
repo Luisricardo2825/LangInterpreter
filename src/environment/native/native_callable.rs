@@ -1,6 +1,8 @@
+use std::any::Any;
+
 use crate::environment::values::Value;
 
-pub trait NativeCallable: std::fmt::Debug + NativeCallableClone {
+pub trait NativeCallable: std::fmt::Debug + NativeCallableClone + Any {
     fn is_static(&self) -> bool {
         false
     }
@@ -28,8 +30,23 @@ pub trait NativeCallable: std::fmt::Debug + NativeCallableClone {
     fn instantiate(&self, _args: Vec<Value>) -> Result<Value, String> {
         Err(format!("Class {} cannot be instantiated", self.get_name()))
     }
+
+    fn get_custom_method(&self, _method_name: &str) -> Option<Value> {
+        None
+    }
+    fn add_custom_method(&mut self, _method_name: String, _method: Value) -> Result<(), String> {
+        Err(format!(
+            "Class {} cannot have custom methods",
+            self.get_name()
+        ))
+    }
 }
 
+impl dyn NativeCallable {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
 pub trait NativeCallableClone {
     fn clone_box(&self) -> Box<dyn NativeCallable>;
 }

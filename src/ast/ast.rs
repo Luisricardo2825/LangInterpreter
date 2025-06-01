@@ -71,6 +71,7 @@ pub enum Stmt {
 pub struct FunctionStmt {
     pub name: String,
     pub params: Vec<String>,
+    pub vararg: Option<String>,
     pub body: Vec<Stmt>,
 }
 #[derive(Debug, Clone, PartialEq)]
@@ -110,12 +111,13 @@ pub enum Expr {
         args: Vec<Expr>,
     },
     New {
-        class_name: String,
-        args: Vec<Expr>,
+        class_expr: Box<Expr>,
+        // args: Vec<Expr>,
     },
 
     This,
     Block(Vec<Stmt>),
+    Spread(Box<Expr>),
 }
 
 #[derive(Debug)]
@@ -242,13 +244,14 @@ impl Expr {
                     .join(", ");
                 format!("{}({})", callee.to_string(), args_str)
             }
-            Expr::New { class_name, args } => {
-                let args_str = args
-                    .iter()
-                    .map(|a| a.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("new {}({})", class_name, args_str)
+            Expr::New { class_expr } => {
+                let class_name = class_expr.to_string();
+                // let args_str = args
+                //     .iter()
+                //     .map(|a| a.to_string())
+                //     .collect::<Vec<_>>()
+                //     .join(", ");
+                format!("new {}", class_name)
             }
             Expr::This => "this".to_string(),
             Expr::Block(stmts) => {
@@ -258,6 +261,9 @@ impl Expr {
                     .collect::<Vec<_>>()
                     .join("\n");
                 format!("{{\n{}\n}}", body)
+            }
+            Expr::Spread(expr) => {
+                format!("...{}", expr.to_string())
             }
         }
     }
@@ -272,7 +278,34 @@ pub enum AssignOperator {
     DivAssign, // /=
     ModAssign, // %=
     PowAssign, // **=
-               // ... adicione outros se necessário
+}
+impl AssignOperator {
+    pub fn from_op(op: &str) -> Option<Self> {
+        match op {
+            "=" => Some(AssignOperator::Assign),
+            "+=" => Some(AssignOperator::AddAssign),
+            "-=" => Some(AssignOperator::SubAssign),
+            "*=" => Some(AssignOperator::MulAssign),
+            "/=" => Some(AssignOperator::DivAssign),
+            "%=" => Some(AssignOperator::ModAssign),
+            "**=" => Some(AssignOperator::PowAssign),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for AssignOperator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AssignOperator::Assign => write!(f, "="),
+            AssignOperator::AddAssign => write!(f, "+="),
+            AssignOperator::SubAssign => write!(f, "-="),
+            AssignOperator::MulAssign => write!(f, "*="),
+            AssignOperator::DivAssign => write!(f, "/="),
+            AssignOperator::ModAssign => write!(f, "%="),
+            AssignOperator::PowAssign => write!(f, "**="),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -419,6 +452,7 @@ impl Literal {
 pub struct MethodDecl {
     pub name: String,
     pub params: Vec<String>,
+    pub vararg: Option<String>,
     pub body: Vec<Stmt>,
     pub is_static: bool,
 }

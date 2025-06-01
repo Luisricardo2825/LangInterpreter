@@ -1,12 +1,16 @@
-use std::{fmt::Display, ops::Add};
+use std::{collections::HashMap, fmt::Display, hash::Hash, ops::Add};
 
-use crate::environment::{native::native_callable::NativeCallable, values::Value};
+use crate::{
+    environment::{native::native_callable::NativeCallable, values::Value},
+    impl_from_for_class, impl_logical_operations,
+};
 
 #[derive(Debug, Clone)]
 pub struct NativeStringClass {
     pub args: Vec<Value>,
     pub value: Option<String>,
     pub is_static: bool,
+    pub custom_methods: HashMap<String, Value>,
 }
 
 impl NativeStringClass {
@@ -15,6 +19,7 @@ impl NativeStringClass {
             args: vec![],
             value: None,
             is_static: true,
+            custom_methods: HashMap::new(),
         }
     }
     pub fn new_with_value(value: String) -> Self {
@@ -22,6 +27,7 @@ impl NativeStringClass {
             args: vec![],
             value: Some(value),
             is_static: false,
+            custom_methods: HashMap::new(),
         }
     }
     pub fn new_with_args(args: Vec<Value>) -> Self {
@@ -29,6 +35,7 @@ impl NativeStringClass {
             args,
             value: None,
             is_static: true,
+            custom_methods: HashMap::new(),
         }
     }
     pub fn set_args(&mut self, args: Vec<Value>) {
@@ -81,6 +88,16 @@ impl Add<&NativeStringClass> for &NativeStringClass {
     }
 }
 
+impl Add<&NativeStringClass> for NativeStringClass {
+    type Output = NativeStringClass;
+
+    fn add(self, rhs: &NativeStringClass) -> Self::Output {
+        let mut value = self.get_value();
+        value.push_str(&rhs.get_value());
+        NativeStringClass::new_with_value(value)
+    }
+}
+
 impl Add<&str> for &NativeStringClass {
     type Output = NativeStringClass;
 
@@ -101,17 +118,7 @@ impl Add<String> for &NativeStringClass {
     }
 }
 
-impl From<String> for NativeStringClass {
-    fn from(value: String) -> Self {
-        Self::new_with_value(value)
-    }
-}
-
-impl From<&str> for NativeStringClass {
-    fn from(value: &str) -> Self {
-        Self::new_with_value(value.to_string())
-    }
-}
+impl_from_for_class!(String, String, NativeStringClass);
 
 impl Display for NativeStringClass {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -119,11 +126,7 @@ impl Display for NativeStringClass {
     }
 }
 
-impl PartialEq for NativeStringClass {
-    fn eq(&self, other: &Self) -> bool {
-        self.value == other.value
-    }
-}
+impl_logical_operations!(NativeStringClass, NativeStringClass);
 impl NativeCallable for NativeStringClass {
     fn call(&self, method_name: &str) -> Result<Value, String> {
         let mut args = self.get_args();
@@ -286,6 +289,14 @@ impl NativeCallable for NativeStringClass {
 
     fn get_name(&self) -> String {
         "String".to_string()
+    }
+
+    fn get_custom_method(&self, _method_name: &str) -> Option<Value> {
+        self.custom_methods.get(_method_name).cloned()
+    }
+    fn add_custom_method(&mut self, _method_name: String, _method: Value) -> Result<(), String> {
+        self.custom_methods.insert(_method_name, _method);
+        Ok(())
     }
 }
 

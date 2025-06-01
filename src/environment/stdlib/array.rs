@@ -187,12 +187,9 @@ impl NativeCallable for NativeArrayClass {
                 (self.get_value().borrow().len() as f64).into(),
             )),
             "of" => match &args[..] {
-                values => {
-                    // println!("Entrou aqui");
-                    Ok(Value::Array(
-                        Rc::new(RefCell::new(values.iter().map(|v| v.clone()).collect())).into(),
-                    ))
-                }
+                values => Ok(Value::Array(
+                    Rc::new(RefCell::new(values.iter().map(|v| v.clone()).collect())).into(),
+                )),
             },
             _ => Err(format!("Método nativo desconhecido: {}", method_name)),
         }

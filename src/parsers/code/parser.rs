@@ -49,7 +49,7 @@ impl Parser {
             _ => Some(Stmt::ExprStmt(self.parse_expr()?)),
         };
         // Se houver um ponto e vírgula depois do statement, consome
-        self.expect(&Token::Semicolon);
+        self.consume(&Token::Semicolon);
 
         stmt
     }
@@ -84,8 +84,8 @@ impl Parser {
                     default_import = Some(name);
 
                     // Pode vir uma vírgula antes do named import
-                    if self.expect(&Token::Comma) {
-                        if self.expect(&Token::BraceOpen) {
+                    if self.is(&Token::Comma) {
+                        if self.is(&Token::BraceOpen) {
                             while self.peek() != Some(&Token::BraceClose) {
                                 let imported = match self.next()? {
                                     Token::Identifier(name) => name,
@@ -103,7 +103,7 @@ impl Parser {
 
                                 named_imports.push((imported, local));
 
-                                if !self.expect(&Token::Comma) {
+                                if !self.is(&Token::Comma) {
                                     break;
                                 }
                             }
@@ -153,7 +153,7 @@ impl Parser {
 
                     named_imports.push((imported, local));
 
-                    if !self.expect(&Token::Comma) {
+                    if !self.is(&Token::Comma) {
                         break;
                     }
                 }
@@ -294,20 +294,62 @@ impl Parser {
 
         self.expect(&Token::ParenOpen);
         let mut params = vec![];
-        while let Some(Token::Identifier(param)) = self.peek() {
-            params.push(param.clone());
-            self.next();
-            if !self.expect(&Token::Comma) {
-                break;
+        let mut vararg: Option<String> = None;
+
+        loop {
+            match self.peek()? {
+                Token::ParenClose => break,
+                Token::Ellipsis => {
+                    self.next(); // consume "..."
+                    if vararg.is_some() {
+                        panic!("Error: Only one '...' parameter is allowed");
+                    }
+
+                    match self.next()? {
+                        Token::Identifier(name) => {
+                            vararg = Some(name);
+                        }
+                        _ => {
+                            panic!("Error: Expected identifier after '...'");
+                        }
+                    }
+
+                    if self.peek() == Some(&Token::Comma) && vararg.is_some() {
+                        panic!("Error: A rest parameter must be last in a parameter list.");
+                    }
+                    // After vararg, no more parameters are allowed
+                    if self.peek() != Some(&Token::ParenClose) {
+                        panic!(
+                            "Error: Unexpected token: {:?}",
+                            self.peek().unwrap().to_string()
+                        );
+                    }
+
+                    break;
+                }
+                Token::Identifier(name) => {
+                    params.push(name.clone());
+                    self.next(); // consume identifier
+
+                    if self.peek() == Some(&Token::Comma) {
+                        self.next(); // consume comma
+                    } else {
+                        break;
+                    }
+                }
+                _ => {
+                    panic!("Error: Unexpected token in parameter list");
+                }
             }
         }
-        self.expect(&Token::ParenClose);
 
+        self.expect(&Token::ParenClose);
         let body = self.parse_block();
 
         Some(MethodDecl {
             name,
             params,
+            vararg,
             body,
             is_static,
         })
@@ -355,6 +397,7 @@ impl Parser {
 
         Some(Stmt::While { condition, body })
     }
+
     fn parse_for_stmt(&mut self) -> Option<Stmt> {
         self.next(); // consume 'for'
         self.expect(&Token::ParenOpen);
@@ -439,7 +482,8 @@ impl Parser {
     }
 
     fn parse_func_decl(&mut self) -> Option<Stmt> {
-        self.next(); // consume "fn"
+        self.next(); // consume "fn" or "function"
+
         let name = match self.next()? {
             Token::Identifier(name) => name,
             _ => return None,
@@ -447,19 +491,65 @@ impl Parser {
 
         self.expect(&Token::ParenOpen);
         let mut params = vec![];
-        while let Some(Token::Identifier(param)) = self.peek() {
-            params.push(param.clone());
-            self.next();
-            if !self.expect(&Token::Comma) {
-                break;
+        let mut vararg: Option<String> = None;
+
+        loop {
+            match self.peek()? {
+                Token::ParenClose => break,
+                Token::Ellipsis => {
+                    self.next(); // consume "..."
+                    if vararg.is_some() {
+                        panic!("Error: Only one '...' parameter is allowed");
+                    }
+                    let token = self.next()?;
+                    match token {
+                        Token::Identifier(name) => {
+                            vararg = Some(name);
+                        }
+                        _ => {
+                            panic!("Error: Expected identifier after '...'. {:?}", token);
+                        }
+                    }
+
+                    if self.peek() == Some(&Token::Comma) && vararg.is_some() {
+                        panic!("Error: A rest parameter must be last in a parameter list.");
+                    }
+                    // After vararg, no more parameters are allowed
+                    if self.peek() != Some(&Token::ParenClose) {
+                        panic!(
+                            "Error: Unexpected token: {:?}",
+                            self.peek().unwrap().to_string()
+                        );
+                    }
+
+                    break;
+                }
+                Token::Identifier(name) => {
+                    params.push(name.clone());
+                    self.next(); // consume identifier
+
+                    if self.peek() == Some(&Token::Comma) {
+                        self.next(); // consume comma
+                    } else {
+                        break;
+                    }
+                }
+                _ => {
+                    panic!("Error: Unexpected token in parameter list");
+                }
             }
         }
+
         self.expect(&Token::ParenClose);
-
         let body = self.parse_block();
-        Some(Stmt::FuncDecl(FunctionStmt { name, params, body }))
-    }
 
+        Some(Stmt::FuncDecl(FunctionStmt {
+            name,
+            params,
+            vararg,
+            body,
+        }))
+    }
     fn parse_return_stmt(&mut self) -> Option<Stmt> {
         self.next(); // consume "return"
         let value = if let Some(Token::BraceClose) = self.peek() {
@@ -487,12 +577,15 @@ impl Parser {
     fn parse_assignment_expr(&mut self) -> Option<Expr> {
         let expr = self.parse_binary_expr(0)?;
 
-        if let Some(Token::Assign) = self.peek() {
+        let operator: Option<AssignOperator> = get_assign_op(self.peek());
+
+        // TODO: Assign operators
+        if let Some(op) = operator {
             self.next(); // consume '='
             let value = self.parse_assignment_expr()?;
             return Some(Expr::Assign {
                 target: Box::new(expr),
-                op: AssignOperator::Assign,
+                op: op,
                 value: Box::new(value),
             });
         }
@@ -500,53 +593,44 @@ impl Parser {
         Some(expr)
     }
 
-    fn parse_identifier(&mut self) -> Option<Expr> {
-        let name = match self.next()? {
-            Token::Identifier(name) => name,
-            _ => return None,
-        };
-        Some(Expr::Identifier(name))
-    }
-
     fn parse_arguments(&mut self) -> Vec<Expr> {
         let mut args: Vec<Expr> = vec![];
+
+        self.expect(&Token::ParenOpen);
+
         while self.peek() != Some(&Token::ParenClose) {
-            let expr = self.parse_expr();
-            if expr.is_some() {
-                args.push(expr.unwrap());
-            }
-            if !self.expect(&Token::Comma) {
+            let arg = if self.peek() == Some(&Token::Ellipsis) {
+                let inner = self.parse_expr().expect("Expected expression after '...'");
+                Expr::Spread(Box::new(inner))
+            } else {
+                self.parse_expr().expect("Expected argument expression")
+            };
+
+            args.push(arg);
+
+            if self.peek() != Some(&Token::Comma) {
                 break;
             }
+
+            self.next(); // consume comma
         }
+
         self.expect(&Token::ParenClose);
+
         args
     }
 
     fn parse_primary(&mut self) -> Option<Expr> {
         match self.next()? {
             Token::Identifier(s) if s == "this" => Some(Expr::This),
-            Token::Identifier(s) if s == "new" => {
-                let class_name = self.parse_identifier()?;
-                let args = self.parse_arguments();
-                let class_name = class_name.to_string();
-                Some(Expr::New { class_name, args })
-            }
+            Token::Identifier(s) if s == "new" => self.parse_new_keyword(),
             Token::Number(n) => Some(Expr::Literal(Literal::Number(n))),
             Token::String(s) => Some(Expr::Literal(Literal::String(s))),
             Token::Bool(b) => Some(Expr::Literal(Literal::Bool(b))),
             Token::Null => Some(Expr::Literal(Literal::Null)),
             Token::Identifier(name) => {
                 if let Some(Token::ParenOpen) = self.peek() {
-                    self.next(); // consume "("
-                    let mut args = vec![];
-                    while self.peek() != Some(&Token::ParenClose) {
-                        args.push(self.parse_expr()?);
-                        if !self.expect(&Token::Comma) {
-                            break;
-                        }
-                    }
-                    self.expect(&Token::ParenClose);
+                    let args = self.parse_arguments();
                     Some(Expr::Call {
                         callee: Box::new(Expr::Identifier(name)),
                         args,
@@ -564,6 +648,14 @@ impl Parser {
             Token::BracketOpen => self.parse_bracket(),
             _ => None,
         }
+    }
+
+    fn parse_new_keyword(&mut self) -> Option<Expr> {
+        let class_expr = self.parse_expr()?;
+
+        Some(Expr::New {
+            class_expr: Box::new(class_expr),
+        })
     }
 
     // fn parse_this_expr(&mut self) -> Option<Expr> {
@@ -609,8 +701,16 @@ impl Parser {
                     self.next(); // consume '('
                     let mut args = Vec::new();
                     while self.peek() != Some(&Token::ParenClose) {
-                        args.push(self.parse_expr()?);
-                        if !self.expect(&Token::Comma) {
+                        let arg = if self.peek() == Some(&Token::Ellipsis) {
+                            self.next(); // consume '...'
+                            let inner = self.parse_expr()?;
+                            Expr::Spread(Box::new(inner))
+                        } else {
+                            self.parse_expr()?
+                        };
+                        args.push(arg);
+
+                        if !self.is(&Token::Comma) {
                             break;
                         }
                     }
@@ -673,12 +773,12 @@ impl Parser {
                 break;
             }
             elements.push(self.parse_expr()?);
-            if !self.expect(&Token::Comma) {
+            if !self.is(&Token::Comma) {
                 break;
             }
         }
 
-        self.expect(&Token::BracketClose);
+        self.is(&Token::BracketClose);
         Some(Expr::Literal(Literal::Array(elements)))
     }
 
@@ -703,12 +803,12 @@ impl Parser {
     }
 
     fn parse_object_literal(&mut self) -> Option<Expr> {
-        self.expect(&Token::BraceOpen);
+        self.is(&Token::BraceOpen);
 
         let mut properties = vec![];
 
         while self.peek()? != &Token::BraceClose {
-            if self.expect(&Token::Ellipsis) {
+            if self.is(&Token::Ellipsis) {
                 // ...expr
                 let expr = self.parse_expr()?;
                 properties.push(ObjectEntry::Spread(expr));
@@ -719,7 +819,7 @@ impl Parser {
                     _ => return None,
                 };
 
-                if self.expect(&Token::Colon) {
+                if self.is(&Token::Colon) {
                     let value = self.parse_expr()?;
                     properties.push(ObjectEntry::Property { key, value });
                 } else {
@@ -729,12 +829,12 @@ impl Parser {
             }
 
             // Optional comma
-            if !self.expect(&Token::Comma) {
+            if !self.is(&Token::Comma) {
                 break;
             }
         }
 
-        self.expect(&Token::BraceClose);
+        self.is(&Token::BraceClose);
         Some(Expr::Literal(Literal::Object(properties)))
     }
 
@@ -800,7 +900,21 @@ impl Parser {
         }
     }
 
-    fn expect(&mut self, expected: &Token) -> bool {
+    #[track_caller]
+    fn expect(&mut self, expected: &Token) {
+        let caller = std::panic::Location::caller();
+        let location = format!("{}:{}", caller.file(), caller.line());
+        if self.peek() != Some(expected) {
+            panic!(
+                "Unexpected token: {:?}, expected: {:?} {location}",
+                self.peek(),
+                expected
+            );
+        }
+        self.next(); // avança o cursor
+    }
+
+    fn is(&mut self, expected: &Token) -> bool {
         if let Some(tok) = self.peek() {
             if tok == expected {
                 self.pos += 1;
@@ -834,6 +948,20 @@ impl Parser {
 }
 
 // === Helpers ===
+
+fn get_assign_op(tok: Option<&Token>) -> Option<AssignOperator> {
+    match tok {
+        Some(Token::Assign) => Some(AssignOperator::Assign), // #[token("=")]
+        Some(Token::AddAssign) => Some(AssignOperator::AddAssign), // #[token("+=")]
+        Some(Token::SubAssign) => Some(AssignOperator::SubAssign), //  #[token("-=")]
+        Some(Token::MulAssign) => Some(AssignOperator::MulAssign), //  #[token("*=")]
+        Some(Token::DivAssign) => Some(AssignOperator::DivAssign), // #[token("/=")]
+        Some(Token::ModAssign) => Some(AssignOperator::ModAssign), //  #[token("%=")]
+        Some(Token::PowAssign) => Some(AssignOperator::PowAssign), // #[token("**=")]
+
+        _ => None,
+    }
+}
 
 fn get_unary_op(tok: &Token) -> Option<UnaryOperator> {
     match tok {

@@ -24,12 +24,22 @@ impl NativeCallable for NativeIoClass {
     fn call_with_args(&self, method_name: &str, args: Vec<Value>) -> Result<Value, String> {
         match method_name {
             "print" => match &args[..] {
-                [Value::String(s)] => {
-                    print!("{}", s);
-                    std::io::stdout().flush().unwrap();
+                _ => {
+                    let mut s = String::new();
+                    for arg in args {
+                        if arg.is_void() {
+                            continue;
+                        }
+                        s += &arg.to_string();
+                        // Add space
+                        s += " ";
+                    }
+                    if !s.is_empty() {
+                        s.pop(); // Remove last space
+                        print!("{}", s);
+                    }
                     Ok(Value::Void)
                 }
-                _ => Err("print espera uma string".to_string()),
             },
             "println" => match &args[..] {
                 _ => {
@@ -42,9 +52,10 @@ impl NativeCallable for NativeIoClass {
                         // Add space
                         s += " ";
                     }
-                    // Remove last space
-                    s.pop();
-                    println!("{}", s);
+                    if !s.is_empty() {
+                        s.pop(); // Remove last space
+                        println!("{}", s);
+                    }
                     Ok(Value::Void)
                 }
             },
