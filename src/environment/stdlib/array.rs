@@ -37,6 +37,10 @@ impl NativeArrayClass {
         self.value.clone().unwrap()
     }
 
+    pub fn set_value(&mut self, value: Rc<RefCell<Vec<Value>>>) {
+        self.value = Some(value);
+    }
+
     pub fn get_this(&self) -> Value {
         Value::Array(self.get_value().into())
     }
@@ -186,6 +190,12 @@ impl NativeCallable for NativeArrayClass {
             "length" => Ok(Value::Number(
                 (self.get_value().borrow().len() as f64).into(),
             )),
+            "sort" => {
+                let vec = self.get_value();
+                let mut array = vec.borrow_mut();
+                array.sort_by(|a, b| a.to_string().partial_cmp(&b.to_string()).unwrap());
+                Ok(Value::Void)
+            }
             "of" => match &args[..] {
                 values => Ok(Value::Array(
                     Rc::new(RefCell::new(values.iter().map(|v| v.clone()).collect())).into(),

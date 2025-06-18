@@ -1,7 +1,10 @@
-use std::fmt::Display;
+use std::{collections::HashMap, fmt::Display};
 
 use crate::{
-    environment::{native::native_callable::NativeCallable, values::Value},
+    ast::ast::{Expr, MethodDecl, Stmt},
+    environment::{
+        helpers::class::ClassGenerator, native::native_callable::NativeCallable, values::Value,
+    },
     impl_from_for_class, impl_logical_operations, impl_math_operations,
 };
 
@@ -62,6 +65,48 @@ impl NativeNumberClass {
         }
         panic!("Método '{}' não encontrado", method_name);
     }
+
+    pub fn create_class() -> Stmt {
+        let mut instance_fields = HashMap::new();
+        let static_fields = HashMap::new();
+
+        instance_fields.insert(
+            "value".to_string(),
+            Expr::Literal(crate::ast::ast::Literal::Null),
+        );
+
+        let method_value_of = MethodDecl {
+            name: "valueOf".to_string(),
+            params: vec![],
+            body: vec![Stmt::Return(Some(crate::ast::ast::Expr::GetProperty {
+                object: Box::new(Expr::This),
+                property: Box::new(Expr::Identifier("value".to_string())),
+            }))],
+            modifiers: vec![],
+            vararg: None,
+        };
+
+        let constructor = MethodDecl {
+            name: "constructor".to_string(),
+            params: vec!["value".to_string()],
+            body: vec![Stmt::ExprStmt(ClassGenerator::set_prop_from_this(
+                "value".to_string(),
+                Expr::Identifier("value".to_string()),
+            ))],
+            modifiers: vec![],
+            vararg: None,
+        };
+
+        let class_stmt = Stmt::ClassDecl {
+            name: "Number".to_string(),
+            superclass: None,
+            methods: vec![method_value_of, constructor],
+            static_fields: static_fields,
+            instance_fields: instance_fields,
+        };
+
+        return class_stmt;
+    }
 }
 
 impl_math_operations!(NativeNumberClass);
@@ -80,6 +125,7 @@ impl Display for NativeNumberClass {
     }
 }
 
+#[allow(unused_assignments)]
 impl NativeCallable for NativeNumberClass {
     fn call(&self, method_name: &str) -> Result<Value, String> {
         let mut args = self.get_args();
@@ -88,27 +134,11 @@ impl NativeCallable for NativeNumberClass {
         }
         match method_name {
             "valueOf" => {
-                let (_, num_of_args) = self.get_method_info(method_name);
-
-                if args.len() != num_of_args {
-                    return Err(format!(
-                        "Método nativo '{method_name}' esperava {num_of_args} argumentos, mas recebeu {} {:?}",
-                        args.len(),args
-                    ));
-                }
                 let arg = self.get_this();
 
                 Ok(Value::Number(arg.to_number().into()))
             }
             "toString" => {
-                let (_, num_of_args) = self.get_method_info(method_name);
-
-                if args.len() != num_of_args {
-                    return Err(format!(
-                        "Método nativo '{method_name}' esperava {num_of_args} argumentos, mas recebeu {}",
-                        args.len()
-                    ));
-                }
                 let arg = self.get_this();
 
                 Ok(Value::String(arg.to_string().into()))

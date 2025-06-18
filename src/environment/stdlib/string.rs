@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Display, hash::Hash, ops::Add};
+use std::{collections::HashMap, fmt::Display, ops::Add};
 
 use crate::{
     environment::{native::native_callable::NativeCallable, values::Value},

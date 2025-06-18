@@ -62,6 +62,12 @@ pub enum Stmt {
         iterable: Expr,
         body: Vec<Stmt>,
     },
+    TryCatchFinally {
+        try_block: Vec<Stmt>,
+        catch_block: Option<(String, Vec<Stmt>)>,
+        finally_block: Option<Vec<Stmt>>,
+    },
+    Throw(Expr),
     ExprStmt(Expr),
     Return(Option<Expr>),
     Break,
@@ -126,6 +132,116 @@ pub enum ControlFlow<T: std::fmt::Debug> {
     Break,
     Continue,
     None,
+    Error(Value),
+}
+
+pub fn debug_stmts(stmts: &[Stmt], indent: usize) {
+    for stmt in stmts {
+        debug_stmt(stmt, indent);
+    }
+}
+
+pub fn debug_stmt(stmt: &Stmt, indent: usize) {
+    let pad = " ".repeat(indent);
+    match stmt {
+        Stmt::ImportNamed { .. } => println!("{pad}Stmt::ImportNamed"),
+        Stmt::ImportDefault { .. } => println!("{pad}Stmt::ImportDefault"),
+        Stmt::ImportAll { .. } => println!("{pad}Stmt::ImportAll"),
+        Stmt::ImportMixed { .. } => println!("{pad}Stmt::ImportMixed"),
+        Stmt::Export(inner) => {
+            println!("{pad}Stmt::Export");
+            debug_stmt(inner, indent + 2);
+        }
+        Stmt::ExportDefault(inner) => {
+            println!("{pad}Stmt::ExportDefault");
+            debug_stmt(inner, indent + 2);
+        }
+        Stmt::Let { .. } => println!("{pad}Stmt::Let"),
+        Stmt::FuncDecl(_) => println!("{pad}Stmt::FuncDecl"),
+        Stmt::ClassDecl { name, methods, .. } => {
+            println!("{pad}Stmt::ClassDecl ({name})");
+            for m in methods {
+                println!("{pad}  └── Stmt::ClassDecl::Method ({})", m.name);
+            }
+        }
+        Stmt::Method(m) => println!("{pad}Stmt::Method ({})", m.name),
+        Stmt::If {
+            then_branch,
+            else_ifs,
+            else_branch,
+            ..
+        } => {
+            println!("{pad}Stmt::If");
+            for s in then_branch {
+                debug_stmt(s, indent + 2);
+            }
+            for (_cond, block) in else_ifs {
+                println!("{pad}  ├── Stmt::ElseIf");
+                if let Some(stmts) = block {
+                    for s in stmts {
+                        debug_stmt(s, indent + 4);
+                    }
+                }
+            }
+            if let Some(else_stmts) = else_branch {
+                println!("{pad}  └── Stmt::Else");
+                for s in else_stmts {
+                    debug_stmt(s, indent + 4);
+                }
+            }
+        }
+        Stmt::While { body, .. } => {
+            println!("{pad}Stmt::While");
+            for s in body {
+                debug_stmt(s, indent + 2);
+            }
+        }
+        Stmt::For { body, .. } => {
+            println!("{pad}Stmt::For");
+            for s in body {
+                debug_stmt(s, indent + 2);
+            }
+        }
+        Stmt::ForIn { body, .. } => {
+            println!("{pad}Stmt::ForIn");
+            for s in body {
+                debug_stmt(s, indent + 2);
+            }
+        }
+        Stmt::ForOf { body, .. } => {
+            println!("{pad}Stmt::ForOf");
+            for s in body {
+                debug_stmt(s, indent + 2);
+            }
+        }
+        Stmt::TryCatchFinally {
+            try_block,
+            catch_block,
+            finally_block,
+        } => {
+            println!("{pad}Stmt::Try");
+            for s in try_block {
+                debug_stmt(s, indent + 2);
+            }
+            if let Some((_name, catch_block)) = catch_block {
+                println!("{pad}  ├── Stmt::Catch");
+                for s in catch_block {
+                    debug_stmt(s, indent + 4);
+                }
+            }
+            if let Some(finally_block) = finally_block {
+                println!("{pad}  └── Stmt::Finally");
+                for s in finally_block {
+                    debug_stmt(s, indent + 4);
+                }
+            }
+        }
+        Stmt::Throw(_) => println!("{pad}Stmt::Throw"),
+        Stmt::ExprStmt(_) => println!("{pad}Stmt::ExprStmt"),
+        Stmt::Return(_) => println!("{pad}Stmt::Return"),
+        Stmt::Break => println!("{pad}Stmt::Break"),
+        Stmt::Continue => println!("{pad}Stmt::Continue"),
+    }
 }
 
 impl<T: std::fmt::Debug> ControlFlow<T> {
@@ -454,7 +570,37 @@ pub struct MethodDecl {
     pub params: Vec<String>,
     pub vararg: Option<String>,
     pub body: Vec<Stmt>,
-    pub is_static: bool,
+    pub modifiers: Vec<MethodModifiers>,
+}
+
+pub trait MethodModifiersOperations {
+    fn contains(&self, modifier: MethodModifiers) -> bool;
+
+    fn contains_all(&self, modifiers: Vec<MethodModifiers>) -> bool {
+        modifiers.iter().all(|m| self.contains(m.clone()))
+    }
+    fn contains_any(&self, modifiers: Vec<MethodModifiers>) -> bool {
+        modifiers.iter().any(|m| self.contains(m.clone()))
+    }
+    fn contains_str(&self, modifier: &str) -> bool {
+        match modifier.to_lowercase().as_str() {
+            "static" => self.contains(MethodModifiers::Static),
+            "operator" => self.contains(MethodModifiers::Operator),
+            "private" => self.contains(MethodModifiers::Private),
+            _ => false,
+        }
+    }
+}
+impl MethodModifiersOperations for [MethodModifiers] {
+    fn contains(&self, modifier: MethodModifiers) -> bool {
+        self.contains(&modifier)
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MethodModifiers {
+    Static,
+    Operator,
+    Private,
 }
 
 impl std::fmt::Display for Stmt {

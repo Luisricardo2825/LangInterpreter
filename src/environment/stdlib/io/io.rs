@@ -1,6 +1,9 @@
 use std::io::Write;
 
-use crate::environment::{native::native_callable::NativeCallable, Value};
+use crate::{
+    environment::{native::native_callable::NativeCallable, Value},
+    interpreter::Interpreter,
+};
 
 #[derive(Debug, Clone)]
 pub struct NativeIoClass {
@@ -17,6 +20,81 @@ impl NativeIoClass {
     }
     pub fn set_args(&mut self, args: Vec<Value>) {
         self.args = args;
+    }
+
+    fn format_primitive_with_color(&self, val: &Value) -> String {
+        match val {
+            Value::String(s) => s.to_string(),      // verde com aspas
+            other => self.format_with_color(other), // fallback sem cor
+        }
+    }
+
+    fn format_with_color(&self, val: &Value) -> String {
+        match val {
+            Value::String(s) => format!("\x1b[32m\"{}\"\x1b[0m", s), // verde com aspas
+            Value::Number(n) => {
+                format!("\x1b[33m{}\x1b[0m", n.get_value())
+            } // amarelo
+            Value::Bool(b) => format!("\x1b[36m{}\x1b[0m", b),       // ciano
+            Value::Null => format!("\x1b[90mnull\x1b[0m"),           // cinza
+            Value::Void => "".to_string(),
+
+            Value::Array(arr) => {
+                let elements = arr
+                    .get_value()
+                    .borrow()
+                    .iter()
+                    .map(|item| self.format_with_color(item))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("[{}]", elements)
+            }
+
+            Value::Object(obj) => {
+                let props = obj
+                    .borrow()
+                    .iter()
+                    .map(|(k, v)| {
+                        let key_colored = format!("\x1b[35m\"{}\"\x1b[0m", k); // roxo para chaves
+                        let val_colored = self.format_with_color(v);
+                        format!("{}: {}", key_colored, val_colored)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{{{}}}", props)
+            }
+            Value::Instance(instance) => {
+                let value_of_method = instance.clone().borrow().class.get_value_of_method();
+                if value_of_method.is_some() {
+                    let value_of_method = value_of_method.unwrap();
+                    let value = value_of_method.call(vec![], Interpreter::new_empty());
+                    return self.format_with_color(&value);
+                }
+
+                let class_name = instance.borrow().class.name.clone();
+                let props = instance
+                    .borrow()
+                    .class
+                    .instance_variables
+                    .borrow()
+                    .iter()
+                    .map(|(k, v)| {
+                        let key_colored = format!("\x1b[35m\"{}\"\x1b[0m", k); // roxo para chaves
+                        let val_colored = self.format_with_color(v);
+                        format!("{}: {}", key_colored, val_colored)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("[{} {{{}}}]", class_name, props)
+            }
+            Value::Class(_) | Value::InternalClass(_) => {
+                format!("\x1b[34m{}\x1b[0m", val.to_string())
+            } // azul para classes
+            Value::Function(_) | Value::InternalFunction(_) | Value::Method(_) => {
+                format!("\x1b[31m{}\x1b[0m", val.to_string())
+            } // vermelho para funções
+            other => format!("{}", other.to_string()), // fallback sem cor
+        }
     }
 }
 
@@ -41,24 +119,26 @@ impl NativeCallable for NativeIoClass {
                     Ok(Value::Void)
                 }
             },
-            "println" => match &args[..] {
-                _ => {
-                    let mut s = String::new();
-                    for arg in args {
-                        if arg.is_void() {
-                            continue;
+            "println" => {
+                let s = args
+                    .iter()
+                    .filter(|arg| !arg.is_void())
+                    .map(|arg| {
+                        if arg.is_primitive() {
+                            self.format_primitive_with_color(arg)
+                        } else {
+                            self.format_with_color(arg)
                         }
-                        s += &arg.to_string();
-                        // Add space
-                        s += " ";
-                    }
-                    if !s.is_empty() {
-                        s.pop(); // Remove last space
-                        println!("{}", s);
-                    }
-                    Ok(Value::Void)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+
+                if !s.is_empty() {
+                    println!("{}", s);
                 }
-            },
+
+                Ok(Value::Void)
+            }
             "readln" => match &args[..] {
                 [Value::String(prompt)] => {
                     use std::io::{self, Write};

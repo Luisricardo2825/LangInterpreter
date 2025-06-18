@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use crate::ast::ast::{
     AssignOperator, BinaryOperator, CompareOperator, Expr, FunctionStmt, Literal, LogicalOperator,
-    MethodDecl, ObjectEntry, Operator, Stmt, UnaryOperator,
+    MethodDecl, MethodModifiers, ObjectEntry, Operator, Stmt, UnaryOperator,
 };
 use crate::lexer::tokens::Token;
 
@@ -44,6 +44,8 @@ impl Parser {
             Token::Identifier(s) if s == "for" => self.parse_for_stmt(),
             Token::Identifier(s) if s == "while" => self.parse_while_stmt(),
             Token::Identifier(s) if s == "if" => self.parse_if_stmt(),
+            Token::Identifier(s) if s == "try" => self.parse_try_stmt(),
+            Token::Identifier(s) if s == "throw" => self.parse_throw_stmt(),
             Token::BraceOpen => Some(Stmt::ExprStmt(self.parse_brace()?)),
             Token::Identifier(s) if s == "class" => self.parse_class_decl(),
             _ => Some(Stmt::ExprStmt(self.parse_expr()?)),
@@ -54,6 +56,45 @@ impl Parser {
         stmt
     }
 
+    fn parse_throw_stmt(&mut self) -> Option<Stmt> {
+        self.expect_keyword("throw");
+        let expr = self.parse_expr()?;
+        self.expect(&Token::Semicolon);
+        Some(Stmt::Throw(expr))
+    }
+
+    fn parse_try_stmt(&mut self) -> Option<Stmt> {
+        self.expect_keyword("try");
+        let try_block = self.parse_block();
+
+        let catch_block = if self.expect_keyword("catch") {
+            self.expect(&Token::ParenOpen);
+
+            let identifier = match self.next()? {
+                Token::Identifier(name) => name,
+                _ => panic!("Expected identifier after '('"),
+            };
+
+            self.expect(&Token::ParenClose);
+
+            let block = self.parse_block();
+            Some((identifier, block))
+        } else {
+            None
+        };
+
+        let finally_block = if self.expect_keyword("finally") {
+            Some(self.parse_block())
+        } else {
+            None
+        };
+
+        Some(Stmt::TryCatchFinally {
+            try_block,
+            catch_block,
+            finally_block,
+        })
+    }
     fn parse_export_stmt(&mut self) -> Option<Stmt> {
         if self.expect_keyword("export") {
             if self.expect_keyword("default") {
@@ -226,7 +267,7 @@ impl Parser {
 
         while self.peek() != Some(&Token::BraceClose) {
             if self.check_identifier() && self.peek_next() == Some(&Token::ParenOpen) {
-                let method = self.parse_method(false)?;
+                let method = self.parse_method(false, false)?;
                 methods.push(method);
             } else if self.expect_keyword("static") {
                 let prev = self.peek();
@@ -234,7 +275,7 @@ impl Parser {
 
                 match (prev, next) {
                     (Some(Token::Identifier(_)), Some(Token::ParenOpen)) => {
-                        let method = self.parse_method(true)?;
+                        let method = self.parse_method(true, false)?;
                         methods.push(method);
                     }
                     (Some(Token::Identifier(_)), Some(Token::Assign)) => {
@@ -245,6 +286,9 @@ impl Parser {
                         return None;
                     }
                 }
+            } else if self.expect_keyword("operator") {
+                let method = self.parse_method(false, true)?;
+                methods.push(method);
             } else if self.check_identifier() {
                 let (name, expr) = self.parse_field()?;
                 instance_fields.insert(name, expr);
@@ -286,7 +330,7 @@ impl Parser {
     fn check_identifier(&self) -> bool {
         matches!(self.peek(), Some(Token::Identifier(_)))
     }
-    fn parse_method(&mut self, is_static: bool) -> Option<MethodDecl> {
+    fn parse_method(&mut self, is_static: bool, is_operator: bool) -> Option<MethodDecl> {
         let name = match self.next()? {
             Token::Identifier(name) => name,
             _ => return None,
@@ -346,12 +390,20 @@ impl Parser {
         self.expect(&Token::ParenClose);
         let body = self.parse_block();
 
+        let mut modifiers: Vec<MethodModifiers> = vec![];
+
+        if is_static {
+            modifiers.push(MethodModifiers::Static);
+        }
+        if is_operator {
+            modifiers.push(MethodModifiers::Operator);
+        }
         Some(MethodDecl {
             name,
             params,
             vararg,
             body,
-            is_static,
+            modifiers,
         })
     }
 
@@ -816,6 +868,7 @@ impl Parser {
                 // ident or ident: expr
                 let key = match self.next()? {
                     Token::Identifier(name) => name,
+                    Token::String(name) => name,
                     _ => return None,
                 };
 

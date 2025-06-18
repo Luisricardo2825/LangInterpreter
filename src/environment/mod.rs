@@ -1,11 +1,8 @@
+pub mod helpers;
 pub mod native;
 pub mod stdlib;
 pub mod values;
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    rc::{Rc, Weak},
-};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use stdlib::{
     array::NativeArrayClass, fs::fs::NativeFsClass, io::io::NativeIoClass,
@@ -16,7 +13,7 @@ use values::Value;
 #[derive(Clone, Debug)]
 pub struct Environment {
     pub variables: Vec<(String, Value)>,
-    pub parent: Option<Weak<RefCell<Environment>>>,
+    pub parent: Option<Rc<RefCell<Environment>>>,
 }
 
 fn global() -> Vec<(String, Value)> {
@@ -55,14 +52,14 @@ fn global() -> Vec<(String, Value)> {
     //     }),
     // );
 
-    // env.insert(
-    //     "len".to_string(),
-    //     Value::Builtin(|args: Vec<Value>| match &args[..] {
-    //         [Value::String(s)] => Value::Number(s.len() as f64),
-    //         [Value::Array(a)] => Value::Number(a.get_value().borrow().len() as f64),
-    //         _ => Value::Null,
-    //     }),
-    // );
+    env.push((
+        "len".to_string(),
+        Value::Builtin(|args: Vec<Value>| match &args[..] {
+            [Value::String(s)] => Value::Number(s.len().into()),
+            [Value::Array(a)] => Value::Number(a.get_value().borrow().len().into()),
+            _ => Value::Null,
+        }),
+    ));
 
     // // input
     // env.insert(
@@ -120,29 +117,29 @@ fn global() -> Vec<(String, Value)> {
 
     env.push((
         "Io".to_owned(),
-        Value::NativeClass(Rc::new(RefCell::new(NativeIoClass::new()))),
+        Value::InternalClass(Rc::new(RefCell::new(NativeIoClass::new()))),
     ));
     env.push((
         "Array".to_owned(),
-        Value::NativeClass(Rc::new(RefCell::new(NativeArrayClass::new()))),
+        Value::InternalClass(Rc::new(RefCell::new(NativeArrayClass::new()))),
     ));
     env.push((
         "Fs".to_owned(),
-        Value::NativeClass(Rc::new(RefCell::new(NativeFsClass::new()))),
+        Value::InternalClass(Rc::new(RefCell::new(NativeFsClass::new()))),
     ));
     env.push((
         "Json".to_owned(),
-        Value::NativeClass(Rc::new(RefCell::new(NativeJsonClass::new()))),
+        Value::InternalClass(Rc::new(RefCell::new(NativeJsonClass::new()))),
     ));
     env.push((
         "String".to_owned(),
-        Value::NativeClass(Rc::new(RefCell::new(
+        Value::InternalClass(Rc::new(RefCell::new(
             stdlib::string::NativeStringClass::new(),
         ))),
     ));
     env.push((
         "Number".to_owned(),
-        Value::NativeClass(Rc::new(RefCell::new(
+        Value::InternalClass(Rc::new(RefCell::new(
             stdlib::number::NativeNumberClass::new(),
         ))),
     ));
@@ -169,14 +166,14 @@ impl Environment {
     pub fn new_enclosed(parent: Rc<RefCell<Environment>>) -> Self {
         Environment {
             variables: global(),
-            parent: Some(Rc::downgrade(&parent)),
+            parent: Some(Rc::clone(&parent)),
         }
     }
 
     pub fn new_rc_enclosed(parent: Rc<RefCell<Environment>>) -> Rc<RefCell<Environment>> {
         Rc::new(RefCell::new(Environment {
             variables: global(),
-            parent: Some(Rc::downgrade(&parent)),
+            parent: Some(Rc::clone(&parent)),
         }))
     }
 
@@ -188,7 +185,7 @@ impl Environment {
     pub fn rc_enclosed(&self, parent: Rc<RefCell<Environment>>) -> Rc<RefCell<Environment>> {
         Rc::new(RefCell::new(Environment {
             variables: global(),
-            parent: Some(Rc::downgrade(&parent)),
+            parent: Some(Rc::clone(&parent)),
         }))
     }
 
@@ -201,9 +198,7 @@ impl Environment {
     }
 
     fn get_parent(&self) -> Option<Rc<RefCell<Environment>>> {
-        self.parent
-            .as_ref()
-            .and_then(|weak_parent| weak_parent.upgrade()) // Tentar obter Rc de Weak
+        self.parent.clone()
     }
     pub fn get(&self, name: &str) -> Option<Value> {
         if let Some((_, v)) = self.variables.iter().find(|(n, _)| n == name) {
@@ -219,7 +214,7 @@ impl Environment {
         self.variables.clear();
     }
 
-    const RESERVED: &[&str] = &["Number", "String", "Boolean", "Array", "Object", "Function"];
+    const RESERVED: &[&str] = &["String", "Boolean", "Array", "Object", "Function"];
 
     fn is_reserved(name: &str) -> bool {
         Self::RESERVED.contains(&name)
@@ -240,6 +235,23 @@ impl Environment {
             *v = value;
             Ok(())
         } else if let Some(parent) = self.get_parent() {
+            if parent.borrow().exist("this") {
+                if let Some((_, v)) = parent
+                    .borrow_mut()
+                    .variables
+                    .iter_mut()
+                    .find(|(n, _)| n == "this")
+                {
+                    if let Value::Instance(instance) = v {
+                        instance
+                            .borrow()
+                            .this
+                            .borrow_mut()
+                            .assign(name, value.clone())
+                            .unwrap()
+                    }
+                }
+            }
             parent.borrow_mut().assign(name, value)
         } else {
             Err(format!("Variable '{}' not defined", name))
@@ -248,20 +260,15 @@ impl Environment {
 
     pub fn exist(&self, name: &str) -> bool {
         self.variables.iter().any(|(n, _)| n == name)
-            || self
-                .get_parent()
-                .map_or(false, |parent| parent.borrow().exist(name))
     }
 
     pub fn merge(&mut self, other: Environment) {
         self.variables.extend(other.variables);
     }
 
-    pub fn from_parent(&mut self, parent: Rc<RefCell<Environment>>) -> Environment {
-        Environment {
-            variables: self.variables.to_owned(),
-            parent: Some(Rc::downgrade(&parent)),
-        }
+    pub fn with_parent(mut self, parent: Rc<RefCell<Environment>>) -> Self {
+        self.parent = Some(parent);
+        self
     }
 
     pub fn to_rc(&self) -> Rc<RefCell<Environment>> {
@@ -285,6 +292,15 @@ impl Environment {
             vars.extend(parent.borrow().get_vars_from_parent());
         }
         vars
+    }
+
+    pub fn get_vars_name_value_from_parent(&self) -> String {
+        let mut vars = HashMap::new();
+        for (name, value) in self.get_vars_from_parent().iter() {
+            vars.insert(name.clone(), value.to_string());
+        }
+
+        serde_json::to_string(&vars).unwrap()
     }
 
     pub fn get_vars_string(&self) -> String {

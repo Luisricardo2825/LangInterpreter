@@ -274,7 +274,58 @@ fn parser_identifier(lex: &mut Lexer<Token>) -> String {
 
 fn parse_string(lex: &mut Lexer<Token>) -> Option<String> {
     let slice = lex.slice();
-    Some(slice[1..slice.len() - 1].to_string()) // remove aspas
+    let string = slice[1..slice.len() - 1].to_string(); // remove aspas
+    Some(unescape_string(&string))
+}
+
+fn unescape_string(input: &str) -> String {
+    let mut result = String::new();
+    let mut chars = input.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => result.push('\n'),
+                Some('t') => result.push('\t'),
+                Some('r') => result.push('\r'),
+                Some('0') => result.push('\0'),
+                Some('"') => result.push('"'),
+                Some('\'') => result.push('\''),
+                Some('\\') => result.push('\\'),
+                Some('x') => {
+                    let h1 = chars.next();
+                    let h2 = chars.next();
+                    if let (Some(h1), Some(h2)) = (h1, h2) {
+                        if let Ok(byte) = u8::from_str_radix(&format!("{}{}", h1, h2), 16) {
+                            result.push(byte as char);
+                        } else {
+                            result.push_str("\\x");
+                            result.push(h1);
+                            result.push(h2);
+                        }
+                    } else {
+                        result.push_str("\\x");
+                        if let Some(h1) = h1 {
+                            result.push(h1);
+                        }
+                        if let Some(h2) = h2 {
+                            result.push(h2);
+                        }
+                    }
+                }
+                Some(other) => {
+                    // Escape desconhecido, mantém como literal
+                    result.push('\\');
+                    result.push(other);
+                }
+                None => result.push('\\'),
+            }
+        } else {
+            result.push(c);
+        }
+    }
+
+    result
 }
 
 use anyhow::Error;

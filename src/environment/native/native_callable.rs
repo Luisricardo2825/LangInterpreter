@@ -42,11 +42,6 @@ pub trait NativeCallable: std::fmt::Debug + NativeCallableClone + Any {
     }
 }
 
-impl dyn NativeCallable {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
 pub trait NativeCallableClone {
     fn clone_box(&self) -> Box<dyn NativeCallable>;
 }
