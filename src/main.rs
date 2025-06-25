@@ -2,5 +2,5 @@ use lang::interpreter::Interpreter;
 
 fn main() {
     let mut interpreter = Interpreter::new_empty();
-    interpreter.interpret();
+    interpreter.interpret_bench();
 }

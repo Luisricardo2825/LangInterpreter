@@ -1,12 +1,26 @@
-use std::any::Any;
+use dyn_clone::DynClone;
+use std::{any::Any, cell::RefCell, rc::Rc};
 
-use crate::environment::values::Value;
+use crate::{ast::ast::ControlFlow, environment::values::Value};
 
-pub trait NativeCallable: std::fmt::Debug + NativeCallableClone + Any {
+dyn_clone::clone_trait_object!(NativeCallable);
+
+pub trait NativeCallable: std::fmt::Debug + NativeCallableClone + Any + DynClone {
+    fn new() -> Self
+    where
+        Self: Sized;
+
+    fn create() -> Rc<RefCell<dyn NativeCallable>>
+    where
+        Self: Sized,
+    {
+        Rc::new(RefCell::new(Self::new()))
+    }
     fn is_static(&self) -> bool {
         false
     }
     fn get_name(&self) -> String;
+
     fn get_args(&self) -> Vec<Value>;
 
     fn set_args(&mut self, args: Vec<Value>) -> Result<(), String> {
@@ -21,10 +35,10 @@ pub trait NativeCallable: std::fmt::Debug + NativeCallableClone + Any {
     }
 
     fn methods_names(&self) -> Vec<String>;
-    fn call(&self, method_name: &str) -> Result<Value, String> {
+    fn call(&self, method_name: &str) -> ControlFlow<Value> {
         todo!("Method called {method_name}")
     }
-    fn call_with_args(&self, method_name: &str, args: Vec<Value>) -> Result<Value, String> {
+    fn call_with_args(&self, method_name: &str, args: Vec<Value>) -> ControlFlow<Value> {
         todo!("Method called {method_name} {args:?}")
     }
     fn instantiate(&self, _args: Vec<Value>) -> Result<Value, String> {
@@ -52,10 +66,5 @@ where
 {
     fn clone_box(&self) -> Box<dyn NativeCallable> {
         Box::new(self.clone())
-    }
-}
-impl Clone for Box<dyn NativeCallable> {
-    fn clone(&self) -> Box<dyn NativeCallable> {
-        self.clone_box()
     }
 }

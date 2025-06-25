@@ -1,8 +1,15 @@
 use std::{cell::RefCell, rc::Rc};
 
-use crate::environment::{native::native_callable::NativeCallable, values::Value};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone)]
+use crate::{
+    ast::ast::ControlFlow,
+    environment::{native::native_callable::NativeCallable, values::Value},
+};
+
+create_instance_fn!(NativeArrayClass);
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NativeArrayClass {
     pub args: Vec<Value>,
     pub value: Option<Rc<RefCell<Vec<Value>>>>,
@@ -10,14 +17,6 @@ pub struct NativeArrayClass {
 }
 
 impl NativeArrayClass {
-    pub fn new() -> Self {
-        Self {
-            args: vec![],
-            value: None,
-            is_static: true,
-        }
-    }
-
     pub fn new_with_value(value: Rc<RefCell<Vec<Value>>>) -> Self {
         Self {
             args: vec![],
@@ -65,8 +64,15 @@ impl PartialEq for NativeArrayClass {
 }
 
 impl NativeCallable for NativeArrayClass {
+    fn new() -> Self {
+        Self {
+            args: vec![],
+            value: None,
+            is_static: true,
+        }
+    }
     // TODO: Modificar metodos para static e instancia
-    fn call(&self, method_name: &str) -> Result<Value, String> {
+    fn call(&self, method_name: &str) -> ControlFlow<Value> {
         let mut args = self.get_args();
         if args.len() < 1 && self.args.len() > 0 {
             args = self.args.clone();
@@ -74,31 +80,33 @@ impl NativeCallable for NativeArrayClass {
         match method_name {
             "push" => {
                 let arg = args[0].clone();
-                self.get_value().borrow_mut().push(arg.clone());
-                Ok(Value::Void)
+                self.get_value().borrow_mut().push(arg);
+                ControlFlow::None
             }
             "pop" => {
                 let value = self.get_value().borrow_mut().pop();
                 let value = value.unwrap();
-                Ok(value)
+                ControlFlow::Return(value)
             }
             "shift" => {
                 let v = self.get_value();
                 let mut vec = v.borrow_mut();
                 if !vec.is_empty() {
-                    Ok(vec.remove(0))
+                    ControlFlow::Return(vec.remove(0))
                 } else {
-                    Ok(Value::Void)
+                    ControlFlow::None
                 }
             }
             "unshift" => {
                 let value = args[0].clone();
                 self.get_value().borrow_mut().insert(0, value.clone());
-                Ok(Value::Void)
+                ControlFlow::None
             }
             "slice" => {
                 let Value::Number(start) = args[0].clone() else {
-                    return Err(format!("Expected a number, got {}", args[0].type_of()));
+                    return ControlFlow::Error(
+                        format!("Expected a number, got {}", args[0].type_of()).into(),
+                    );
                 };
 
                 let end = args.get(1).unwrap_or(&Value::Null).clone();
@@ -110,10 +118,12 @@ impl NativeCallable for NativeArrayClass {
 
                 if end.is_null() {
                     let slice = vec.get(start..).unwrap_or(&[]).to_vec();
-                    return Ok(Value::Array(Rc::new(RefCell::new(slice)).into()));
+                    return ControlFlow::Return(Value::Array(Rc::new(RefCell::new(slice)).into()));
                 }
                 let Value::Number(end) = end else {
-                    return Err(format!("Expected a number, got {}", end.type_of()));
+                    return ControlFlow::Error(
+                        format!("Expected a number, got {}", end.type_of()).into(),
+                    );
                 };
                 let mut end = end.get_value() as usize;
 
@@ -121,19 +131,23 @@ impl NativeCallable for NativeArrayClass {
                     end = max_size;
                 }
                 let slice = vec.get(start..end).unwrap_or(&[]).to_vec();
-                Ok(Value::Array(Rc::new(RefCell::new(slice)).into()))
+                ControlFlow::Return(Value::Array(Rc::new(RefCell::new(slice)).into()))
             }
             "concat" => {
                 let Value::Array(arr2) = args[0].clone() else {
-                    return Err(format!("Expected a array, got {}", args[0].type_of()));
+                    return ControlFlow::Error(
+                        format!("Expected a array, got {}", args[0].type_of()).into(),
+                    );
                 };
                 let mut result = self.get_value().borrow().clone();
                 result.extend_from_slice(&arr2.get_value().borrow());
-                Ok(Value::Array(Rc::new(RefCell::new(result)).into()))
+                ControlFlow::Return(Value::Array(Rc::new(RefCell::new(result)).into()))
             }
             "join" => {
                 let Value::String(sep) = args[0].clone() else {
-                    return Err(format!("Expected a String, got {}", args[0].type_of()));
+                    return ControlFlow::Error(
+                        format!("Expected a String, got {}", args[0].type_of()).into(),
+                    );
                 };
                 let sep = sep.get_value();
                 let joined = self
@@ -143,11 +157,11 @@ impl NativeCallable for NativeArrayClass {
                     .map(|v| format!("{:?}", v))
                     .collect::<Vec<_>>()
                     .join(&sep);
-                Ok(Value::String(joined.into()))
+                ControlFlow::Return(Value::String(joined.into()))
             }
             "reverse" => {
                 self.get_value().borrow_mut().reverse();
-                Ok(Value::Void)
+                ControlFlow::None
             }
             "indexOf" => {
                 let value = &args.get(0).unwrap_or(&Value::Void);
@@ -158,7 +172,7 @@ impl NativeCallable for NativeArrayClass {
                     .position(|v| v.equal(value))
                     .map(|i| i as f64)
                     .unwrap_or(-1.0);
-                Ok(Value::Number(index.into()))
+                ControlFlow::Return(Value::Number(index.into()))
             }
             "lastIndexOf" => {
                 let value = &args.get(0).unwrap_or(&Value::Void);
@@ -170,38 +184,40 @@ impl NativeCallable for NativeArrayClass {
                     .rposition(|v| v.equal(value))
                     .map(|i| i as f64)
                     .unwrap_or(-1.0);
-                Ok(Value::Number(index.into()))
+                ControlFlow::Return(Value::Number(index.into()))
             }
             "includes" => {
                 let value = &args.get(0).unwrap_or(&Value::Void);
 
                 let found = self.get_value().borrow().iter().any(|v| v.equal(value));
-                Ok(Value::Bool(found))
+                ControlFlow::Return(Value::Bool(found))
             }
             "toString" => {
                 let this = self.get_this().to_string();
-                Ok(Value::String(this.into()))
+                ControlFlow::Return(Value::String(this.into()))
             }
             "isArray" => match &args[..] {
-                [Value::Array(_)] => Ok(Value::Bool(true)),
-                [_] => Ok(Value::Bool(false)),
-                _ => Err("isArray espera um único argumento".to_string()),
+                [Value::Array(_)] => ControlFlow::Return(Value::Bool(true)),
+                [_] => ControlFlow::Return(Value::Bool(false)),
+                _ => ControlFlow::Error("isArray espera um único argumento".to_string().into()),
             },
-            "length" => Ok(Value::Number(
+            "length" => ControlFlow::Return(Value::Number(
                 (self.get_value().borrow().len() as f64).into(),
             )),
             "sort" => {
                 let vec = self.get_value();
                 let mut array = vec.borrow_mut();
                 array.sort_by(|a, b| a.to_string().partial_cmp(&b.to_string()).unwrap());
-                Ok(Value::Void)
+                ControlFlow::None
             }
             "of" => match &args[..] {
-                values => Ok(Value::Array(
+                values => ControlFlow::Return(Value::Array(
                     Rc::new(RefCell::new(values.iter().map(|v| v.clone()).collect())).into(),
                 )),
             },
-            _ => Err(format!("Método nativo desconhecido: {}", method_name)),
+
+            "valueOf" => ControlFlow::Return(Value::Array(self.get_value().into())),
+            _ => ControlFlow::Error(format!("Método nativo desconhecido: {}", method_name).into()),
         }
     }
 

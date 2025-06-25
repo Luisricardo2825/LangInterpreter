@@ -1,1 +1,1 @@
-pub mod io;
+declare_modules_with_reexport!(io);

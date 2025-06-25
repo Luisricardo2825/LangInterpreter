@@ -1,11 +1,16 @@
 use std::{collections::HashMap, fmt::Display, ops::Add};
 
+use serde::{Deserialize, Serialize};
+
 use crate::{
+    ast::ast::ControlFlow,
     environment::{native::native_callable::NativeCallable, values::Value},
     impl_from_for_class, impl_logical_operations,
 };
 
-#[derive(Debug, Clone)]
+create_instance_fn!(NativeStringClass);
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NativeStringClass {
     pub args: Vec<Value>,
     pub value: Option<String>,
@@ -14,14 +19,6 @@ pub struct NativeStringClass {
 }
 
 impl NativeStringClass {
-    pub fn new() -> Self {
-        Self {
-            args: vec![],
-            value: None,
-            is_static: true,
-            custom_methods: HashMap::new(),
-        }
-    }
     pub fn new_with_value(value: String) -> Self {
         Self {
             args: vec![],
@@ -42,7 +39,7 @@ impl NativeStringClass {
         self.args = args;
     }
     pub fn len(&self) -> usize {
-        self.get_value().len()
+        self.get_value().chars().count()
     }
     pub fn is_empty(&self) -> bool {
         self.get_value().is_empty()
@@ -61,20 +58,6 @@ impl NativeStringClass {
 
     pub fn contains(&self, key: &NativeStringClass) -> bool {
         self.get_value().contains(&key.get_value())
-    }
-
-    pub fn get_method_info(&self, method_name: &str) -> (String, usize) {
-        for method_info in methods_config() {
-            let MethodInfo {
-                name,
-                num_of_args,
-                is_static,
-            } = method_info;
-            if name == method_name && is_static == self.is_static {
-                return (name.to_string(), num_of_args);
-            }
-        }
-        panic!("Método '{}' não encontrado", method_name);
     }
 }
 
@@ -128,7 +111,15 @@ impl Display for NativeStringClass {
 
 impl_logical_operations!(NativeStringClass, NativeStringClass);
 impl NativeCallable for NativeStringClass {
-    fn call(&self, method_name: &str) -> Result<Value, String> {
+    fn new() -> Self {
+        Self {
+            args: vec![],
+            value: None,
+            is_static: true,
+            custom_methods: HashMap::new(),
+        }
+    }
+    fn call(&self, method_name: &str) -> ControlFlow<Value> {
         let mut args = self.get_args();
         if args.len() < 1 && self.args.len() > 0 {
             args = self.args.clone();
@@ -137,36 +128,27 @@ impl NativeCallable for NativeStringClass {
             "length" => {
                 let this = self.get_value();
 
-                Ok(Value::Number((this.len() as f64).into()))
+                ControlFlow::Return(Value::Number((this.len() as f64).into()))
             }
             "toUpperCase" => {
                 let Value::String(s) = self.get_this() else {
                     unreachable!("Expected Value::String");
                 };
 
-                Ok(Value::String(s.get_value().to_uppercase().into()))
+                ControlFlow::Return(Value::String(s.get_value().to_uppercase().into()))
             }
             "toLowerCase" => {
                 let arg = self.get_this();
 
                 match arg {
-                    Value::String(s) => Ok(Value::String(s.get_value().to_lowercase().into())),
-                    _ => Err(format!(
+                    Value::String(s) => ControlFlow::Return(Value::String(s.get_value().to_lowercase().into())),
+                    _ => ControlFlow::Error(format!(
                         "Método nativo 'toLowerCase' esperava um argumento do tipo String, mas recebeu {}",
                         arg.type_of()
-                    )),
+                    ).into()),
                 }
             }
             "charAt" => {
-                let (_, num_of_args) = self.get_method_info(method_name);
-
-                if args.len() != num_of_args {
-                    return Err(format!(
-                        "Método nativo '{method_name}' esperava {num_of_args} argumentos, mas recebeu {}",
-                        args.len()
-                    ));
-                }
-
                 let arg = self.get_this();
                 match arg {
                     Value::String(s) => {
@@ -175,29 +157,20 @@ impl NativeCallable for NativeStringClass {
                             Value::Number(n) => {
                                 let n = n.get_value() as i32;
                                 if n < 0 || n >= s.len() as i32 {
-                                    return Ok(Value::Null)
+                                    return ControlFlow::Return(Value::Null)
                                 }
-                                Ok(Value::String(s.get_value().chars().nth(n as usize).unwrap().to_string().into()))
+                                ControlFlow::Return(Value::String(s.get_value().chars().nth(n as usize).unwrap().to_string().into()))
                             }
-                            _ => Err(format!(
+                            _ => ControlFlow::Error(format!(
                                 "Método nativo '{method_name}' esperava um segundo argumento do tipo Number, mas recebeu {}",
                                 arg.type_of()
-                            )),
+                            ).into()),
                         }
                     }
-                    _ => Err(format!("Método nativo '{method_name}' esperava um argumento do tipo String, mas recebeu {}",arg.type_of())),
+                    _ => ControlFlow::Error(format!("Método nativo '{method_name}' esperava um argumento do tipo String, mas recebeu {}",arg.type_of()).into()),
                 }
             }
             "charCodeAt" => {
-                let (_, num_of_args) = self.get_method_info(method_name);
-
-                if args.len() != num_of_args {
-                    return Err(format!(
-                        "Método nativo '{method_name}' esperava {num_of_args} argumentos, mas recebeu {}",
-                        args.len()
-                    ));
-                }
-
                 let value = self.get_this();
                 match value {
                     Value::String(s) => {
@@ -207,32 +180,59 @@ impl NativeCallable for NativeStringClass {
                             Value::Number(n) => {
                                 let n = n.get_value() as i32;
                                 if n < 0 || n >= s.len() as i32 {
-                                    return Ok(Value::Null)
+                                    return ControlFlow::Return(Value::Null)
                                 }
-                                Ok(Value::Number((s.chars().nth(n as usize).unwrap() as i32 as f64).into()))
+                                ControlFlow::Return(Value::Number((s.chars().nth(n as usize).unwrap() as i32 as f64).into()))
                             }
-                            _ => Err(format!("Método nativo '{method_name}' esperava um argumento do tipo String, mas recebeu {}",arg.type_of())),
+                            _ => ControlFlow::Error(format!("Método nativo '{method_name}' esperava um argumento do tipo String, mas recebeu {}",arg.type_of()).into()),
                         }
                     }
-                    _ => Err(format!("Método nativo '{method_name}' esperava um argumento do tipo String, mas recebeu {}",
+                    _ => ControlFlow::Error(format!("Método nativo '{method_name}' esperava um argumento do tipo String, mas recebeu {}",
                         value.type_of()
-                    )),
+                    ).into()),
                 }
+            }
+            "slice" => {
+                let Value::Number(start) = args[0].clone() else {
+                    return ControlFlow::Error(
+                        format!("Expected a number, got {}", args[0].type_of()).into(),
+                    );
+                };
+
+                let end = args.get(1).unwrap_or(&Value::Null).clone();
+
+                let v = self.get_value();
+                let vec = v.chars().collect::<Vec<char>>();
+                let start = start.get_value() as usize;
+                let max_size = vec.len();
+
+                if end.is_null() {
+                    let slice = vec.get(start..).unwrap_or(&[]).to_vec();
+                    // slice to string
+                    let slice = slice.iter().collect::<String>();
+                    return ControlFlow::Return(Value::String(slice.into()));
+                }
+                let Value::Number(end) = end else {
+                    return ControlFlow::Error(
+                        format!("Expected a number, got {}", end.type_of()).into(),
+                    );
+                };
+                let mut end = end.get_value() as usize;
+
+                if end > max_size {
+                    end = max_size;
+                }
+                let slice = vec.get(start..end).unwrap_or(&[]).to_vec();
+                let slice = slice.iter().collect::<String>();
+
+                ControlFlow::Return(Value::String(slice.into()))
             }
             "valueOf" => {
-                let (_, num_of_args) = self.get_method_info(method_name);
-
-                if args.len() != num_of_args {
-                    return Err(format!(
-                        "Método nativo '{method_name}' esperava {num_of_args} argumentos, mas recebeu {}",
-                        args.len()
-                    ));
-                }
                 let arg = self.get_this();
 
-                Ok(Value::String(arg.to_string().into()))
+                ControlFlow::Return(Value::String(arg.to_string().into()))
             }
-            _ => Err(format!("Método nativo desconhecido: {}", method_name)),
+            _ => ControlFlow::Error(format!("Método nativo desconhecido: {}", method_name).into()),
         }
     }
 
@@ -298,48 +298,4 @@ impl NativeCallable for NativeStringClass {
         self.custom_methods.insert(_method_name, _method);
         Ok(())
     }
-}
-
-pub struct MethodInfo {
-    pub name: String,
-    pub num_of_args: usize,
-    pub is_static: bool,
-}
-impl MethodInfo {
-    pub fn new(name: &str, num_of_args: usize, is_static: bool) -> Self {
-        Self {
-            name: name.to_string(),
-            num_of_args,
-            is_static,
-        }
-    }
-}
-
-fn methods_config() -> Vec<MethodInfo> {
-    return vec![
-        MethodInfo::new("length", 0, false),
-        MethodInfo::new("toUpperCase", 0, false),
-        MethodInfo::new("toLowerCase", 0, false),
-        MethodInfo::new("charAt", 1, false),
-        MethodInfo::new("charCodeAt", 0, false),
-        MethodInfo::new("concat", usize::MAX, true),
-        MethodInfo::new("indexOf", 1, false),
-        MethodInfo::new("lastIndexOf", 1, false),
-        MethodInfo::new("localeCompare", 1, false),
-        MethodInfo::new("match", 1, false),
-        MethodInfo::new("replace", 1, false),
-        MethodInfo::new("search", 1, false),
-        MethodInfo::new("slice", 2, false),
-        MethodInfo::new("split", 1, false),
-        MethodInfo::new("substring", 2, false),
-        MethodInfo::new("toLocaleLowerCase", 0, false),
-        MethodInfo::new("toLocaleUpperCase", 0, false),
-        MethodInfo::new("toLowerCase", 0, false),
-        MethodInfo::new("toUpperCase", 0, false),
-        MethodInfo::new("trim", 0, false),
-        MethodInfo::new("trimLeft", 0, false),
-        MethodInfo::new("trimRight", 0, false),
-        MethodInfo::new("valueOf", 1, true),
-        MethodInfo::new("toString", 0, true),
-    ];
 }

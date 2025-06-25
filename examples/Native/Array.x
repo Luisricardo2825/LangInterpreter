@@ -14,7 +14,8 @@ export class Set {
 
     push(value) {
         if (!this.has(value)) {
-            this.value[this.size++] = value;
+            this.size = this.size+1
+            this.value[this.size] = value;
         }
     }
 

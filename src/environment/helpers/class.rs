@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::ast::ast::{
     AssignOperator, BinaryOperator, CompareOperator, Expr, FunctionStmt, Literal, LogicalOperator,
-    MethodDecl, MethodModifiers, ObjectEntry, Operator, Stmt, UnaryOperator,
+    MethodDecl, Modifiers, ObjectEntry, Operator, Stmt, UnaryOperator,
 };
 use std::fmt::Write;
 
@@ -35,31 +35,18 @@ impl ClassGenerator {
         );
         instance_fields.insert(
             "message".to_string(),
-            Expr::Literal(Literal::String("No message".to_string())),
+            Expr::Literal(Literal::String("Default error message".to_string())),
         );
 
         let constructor = MethodDecl {
             name: "constructor".to_string(),
-            params: vec!["message".to_string(), "name".to_string()],
+            params: vec![
+                "self".to_string(),
+                "name".to_string(),
+                "message".to_string(),
+            ],
             vararg: None,
             body: vec![
-                Stmt::If {
-                    condition: Expr::BinaryOp {
-                        op: Operator::Compare(crate::ast::ast::CompareOperator::Ne),
-                        left: Box::new(Expr::Identifier("message".to_string())),
-                        right: Box::new(Expr::Literal(Literal::Null)),
-                    },
-                    then_branch: vec![Stmt::ExprStmt(Expr::Assign {
-                        target: Box::new(Expr::GetProperty {
-                            object: Box::new(Expr::This),
-                            property: Box::new(Expr::Identifier("message".to_string())),
-                        }),
-                        op: AssignOperator::Assign,
-                        value: Box::new(Expr::Identifier("message".to_string())),
-                    })],
-                    else_ifs: vec![],
-                    else_branch: None,
-                },
                 Stmt::If {
                     condition: Expr::BinaryOp {
                         op: Operator::Compare(crate::ast::ast::CompareOperator::Ne),
@@ -68,7 +55,7 @@ impl ClassGenerator {
                     },
                     then_branch: vec![Stmt::ExprStmt(Expr::Assign {
                         target: Box::new(Expr::GetProperty {
-                            object: Box::new(Expr::This),
+                            object: Box::new(Expr::Identifier("self".to_string())),
                             property: Box::new(Expr::Identifier("name".to_string())),
                         }),
                         op: AssignOperator::Assign,
@@ -77,82 +64,173 @@ impl ClassGenerator {
                     else_ifs: vec![],
                     else_branch: None,
                 },
+                Stmt::If {
+                    condition: Expr::BinaryOp {
+                        op: Operator::Compare(crate::ast::ast::CompareOperator::Ne),
+                        left: Box::new(Expr::Identifier("message".to_string())),
+                        right: Box::new(Expr::Literal(Literal::Null)),
+                    },
+                    then_branch: vec![Stmt::ExprStmt(Expr::Assign {
+                        target: Box::new(Expr::GetProperty {
+                            object: Box::new(Expr::Identifier("self".to_string())),
+                            property: Box::new(Expr::Identifier("message".to_string())),
+                        }),
+                        op: AssignOperator::Assign,
+                        value: Box::new(Expr::Identifier("message".to_string())),
+                    })],
+                    else_ifs: vec![],
+                    else_branch: None,
+                },
             ],
             modifiers: vec![],
         };
 
+        let throw = MethodDecl {
+            name: "throw".to_string(),
+            params: vec!["name".to_string(), "message".to_string()],
+            vararg: None,
+            body: vec![Stmt::Return(Some(Expr::New {
+                class_expr: Box::new(Expr::Call {
+                    callee: Box::new(Expr::Identifier("Error".to_string())),
+                    args: vec![
+                        Expr::Identifier("name".to_string()),
+                        Expr::Identifier("message".to_string()),
+                    ],
+                }),
+            }))],
+            modifiers: vec![Modifiers::Static],
+        };
+
         let paint = MethodDecl {
             name: "paint".to_string(),
-            params: vec!["str".to_string()],
+            params: vec!["self".to_string()],
             vararg: None,
-            body: vec![Stmt::Return(Some(Expr::BinaryOp {
-                op: Operator::Binary(crate::ast::ast::BinaryOperator::Add),
-                left: Box::new(Expr::BinaryOp {
+            body: vec![
+                Stmt::Let {
+                    name: "redName".to_string(),
+                    value: Expr::BinaryOp {
+                        op: Operator::Binary(crate::ast::ast::BinaryOperator::Add),
+                        left: Box::new(Expr::BinaryOp {
+                            op: Operator::Binary(crate::ast::ast::BinaryOperator::Add),
+                            left: Box::new(Expr::Literal(Literal::String("\x1b[31m".to_string()))),
+                            right: Box::new(Expr::GetProperty {
+                                object: Box::new(Expr::Identifier("self".to_string())),
+                                property: Box::new(Expr::Identifier("name".to_string())),
+                            }),
+                        }),
+                        right: Box::new(Expr::Literal(Literal::String("\x1b[0m".to_string()))),
+                    },
+                },
+                Stmt::Return(Some(Expr::BinaryOp {
                     op: Operator::Binary(crate::ast::ast::BinaryOperator::Add),
-                    left: Box::new(Expr::Literal(Literal::String("\x1b[31m".to_string()))),
-                    right: Box::new(Expr::Identifier("str".to_string())),
+                    left: Box::new(Expr::BinaryOp {
+                        op: Operator::Binary(crate::ast::ast::BinaryOperator::Add),
+                        left: Box::new(Expr::Identifier("redName".to_string())),
+                        right: Box::new(Expr::Literal(Literal::String(": ".to_string()))),
+                    }),
+                    right: Box::new(Expr::GetProperty {
+                        object: Box::new(Expr::Identifier("self".to_string())),
+                        property: Box::new(Expr::Identifier("message".to_string())),
+                    }),
+                })),
+            ],
+            modifiers: vec![],
+        };
+
+        let to_string = MethodDecl {
+            name: "toString".to_string(),
+            params: vec!["self".to_string()],
+            vararg: None,
+            body: vec![Stmt::Return(Some(Expr::Call {
+                callee: Box::new(Expr::GetProperty {
+                    object: Box::new(Expr::Identifier("self".to_string())),
+                    property: Box::new(Expr::Identifier("paint".to_string())),
                 }),
-                right: Box::new(Expr::Literal(Literal::String("\x1b[0m".to_string()))),
+                args: vec![],
+            }))],
+            modifiers: vec![],
+        };
+
+        let value_of = MethodDecl {
+            name: "valueOf".to_string(),
+            params: vec!["self".to_string()],
+            vararg: None,
+            body: vec![Stmt::Return(Some(Expr::Call {
+                callee: Box::new(Expr::GetProperty {
+                    object: Box::new(Expr::Identifier("self".to_string())),
+                    property: Box::new(Expr::Identifier("toString".to_string())),
+                }),
+                args: vec![],
             }))],
             modifiers: vec![],
         };
 
         let get_message = MethodDecl {
             name: "getMessage".to_string(),
-            params: vec![],
+            params: vec!["self".to_string()],
             vararg: None,
-            body: vec![Stmt::Return(Some(Expr::BinaryOp {
-                op: Operator::Binary(crate::ast::ast::BinaryOperator::Add),
-                left: Box::new(Expr::BinaryOp {
-                    op: Operator::Binary(crate::ast::ast::BinaryOperator::Add),
-                    left: Box::new(Expr::Call {
-                        callee: Box::new(Expr::Identifier("paint".to_string())),
-                        args: vec![Expr::GetProperty {
-                            object: Box::new(Expr::This),
-                            property: Box::new(Expr::Identifier("name".to_string())),
-                        }],
-                    }),
-                    right: Box::new(Expr::Literal(Literal::String(": ".to_string()))),
+            body: vec![Stmt::Return(Some(Expr::GetProperty {
+                object: Box::new(Expr::Identifier("self".to_string())),
+                property: Box::new(Expr::Identifier("message".to_string())),
+            }))],
+            modifiers: vec![],
+        };
+
+        let get_name = MethodDecl {
+            name: "getName".to_string(),
+            params: vec!["self".to_string()],
+            vararg: None,
+            body: vec![Stmt::Return(Some(Expr::GetProperty {
+                object: Box::new(Expr::Identifier("self".to_string())),
+                property: Box::new(Expr::Identifier("name".to_string())),
+            }))],
+            modifiers: vec![],
+        };
+
+        let set_name = MethodDecl {
+            name: "setName".to_string(),
+            params: vec!["self".to_string(), "name".to_string()],
+            vararg: None,
+            body: vec![Stmt::ExprStmt(Expr::Assign {
+                target: Box::new(Expr::GetProperty {
+                    object: Box::new(Expr::Identifier("self".to_string())),
+                    property: Box::new(Expr::Identifier("name".to_string())),
                 }),
-                right: Box::new(Expr::GetProperty {
-                    object: Box::new(Expr::This),
+                op: AssignOperator::Assign,
+                value: Box::new(Expr::Identifier("name".to_string())),
+            })],
+            modifiers: vec![],
+        };
+
+        let set_message = MethodDecl {
+            name: "setMessage".to_string(),
+            params: vec!["self".to_string(), "message".to_string()],
+            vararg: None,
+            body: vec![Stmt::ExprStmt(Expr::Assign {
+                target: Box::new(Expr::GetProperty {
+                    object: Box::new(Expr::Identifier("self".to_string())),
                     property: Box::new(Expr::Identifier("message".to_string())),
                 }),
-            }))],
-            modifiers: vec![],
-        };
-
-        let to_string = MethodDecl {
-            name: "toString".to_string(),
-            params: vec![],
-            vararg: None,
-            body: vec![Stmt::Return(Some(Expr::Call {
-                callee: Box::new(Expr::Identifier("getMessage".to_string())),
-                args: vec![],
-            }))],
-            modifiers: vec![],
-        };
-
-        let throw = MethodDecl {
-            name: "throw".to_string(),
-            params: vec!["message".to_string(), "name".to_string()],
-            vararg: None,
-            body: vec![Stmt::Throw(Expr::New {
-                class_expr: Box::new(Expr::Call {
-                    callee: Box::new(Expr::Identifier("Error".to_string())),
-                    args: vec![
-                        Expr::Identifier("message".to_string()),
-                        Expr::Identifier("name".to_string()),
-                    ],
-                }),
+                op: AssignOperator::Assign,
+                value: Box::new(Expr::Identifier("message".to_string())),
             })],
-            modifiers: vec![MethodModifiers::Static],
+            modifiers: vec![],
         };
 
         let class_stmt = Stmt::ClassDecl {
             name: "Error".to_string(),
             superclass: None,
-            methods: vec![constructor, paint, get_message, to_string, throw],
+            methods: vec![
+                constructor,
+                throw,
+                paint,
+                to_string,
+                value_of,
+                get_message,
+                get_name,
+                set_name,
+                set_message,
+            ],
             static_fields,
             instance_fields,
         };
@@ -232,7 +310,7 @@ impl ClassGenerator {
                     "        modifiers: vec![{}],",
                     m.modifiers
                         .iter()
-                        .map(|m| format!("MethodModifiers::{:?}", m))
+                        .map(|m| format!("Modifiers::{:?}", m))
                         .collect::<Vec<_>>()
                         .join(", ")
                 )
@@ -399,17 +477,11 @@ impl ClassGenerator {
                 ),
             Stmt::Export(inner) => format!("Stmt::Export(Rc::new({}))", Self::stmt_to_code(inner)),
             Stmt::ExportDefault(inner) => format!("Stmt::ExportDefault(Rc::new({}))", Self::stmt_to_code(inner)),
-            Stmt::Let { name, value } => match value {
-                    Some(v) => format!(
-                        "Stmt::Let {{ name: \"{}\".to_string(), value: Some({}) }}",
+            Stmt::Let { name, value } => format!(
+                        "Stmt::Let {{ name: \"{}\".to_string(), value: {} }}",
                         name,
-                        Self::expr_to_code(v)
+                        Self::expr_to_code(value)
                     ),
-                    None => format!(
-                        "Stmt::Let {{ name: \"{}\".to_string(), value: None }}",
-                        name
-                    ),
-                },
             Stmt::Throw(expr) => format!("Stmt::Throw({})", Self::expr_to_code(expr)),
             Stmt::ExprStmt(expr) => format!("Stmt::ExprStmt({})", Self::expr_to_code(expr)),
             Stmt::Return(Some(expr)) => format!("Stmt::Return(Some({}))", Self::expr_to_code(expr)),

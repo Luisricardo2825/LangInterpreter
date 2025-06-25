@@ -1,9 +1,9 @@
 use std::collections::HashMap;
-use std::rc::Rc;
+// use std::rc::Rc; // Troca para BOX para export e ExportAll
 
 use crate::ast::ast::{
     AssignOperator, BinaryOperator, CompareOperator, Expr, FunctionStmt, Literal, LogicalOperator,
-    MethodDecl, MethodModifiers, ObjectEntry, Operator, Stmt, UnaryOperator,
+    MethodDecl, Modifiers, ObjectEntry, Operator, Stmt, UnaryOperator,
 };
 use crate::lexer::tokens::Token;
 
@@ -13,6 +13,7 @@ pub struct Parser {
     pos: usize,
 }
 
+#[allow(unused)]
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
         Self { tokens, pos: 0 }
@@ -100,11 +101,11 @@ impl Parser {
             if self.expect_keyword("default") {
                 let value = self.parse_stmt()?;
                 self.expect(&Token::Semicolon);
-                return Some(Stmt::ExportDefault(Rc::new(value)));
+                return Some(Stmt::ExportDefault(Box::new(value)));
             }
 
             let inner = self.parse_stmt()?; // let, fn, etc.
-            return Some(Stmt::Export(Rc::new(inner)));
+            return Some(Stmt::Export(Box::new(inner)));
         }
 
         panic!("Invalid export syntax")
@@ -286,7 +287,7 @@ impl Parser {
                         return None;
                     }
                 }
-            } else if self.expect_keyword("operator") {
+            } else if self.expect_keyword("operator") || self.expect_keyword("@Operator") {
                 let method = self.parse_method(false, true)?;
                 methods.push(method);
             } else if self.check_identifier() {
@@ -390,13 +391,13 @@ impl Parser {
         self.expect(&Token::ParenClose);
         let body = self.parse_block();
 
-        let mut modifiers: Vec<MethodModifiers> = vec![];
+        let mut modifiers: Vec<Modifiers> = vec![];
 
         if is_static {
-            modifiers.push(MethodModifiers::Static);
+            modifiers.push(Modifiers::Static);
         }
         if is_operator {
-            modifiers.push(MethodModifiers::Operator);
+            modifiers.push(Modifiers::Operator);
         }
         Some(MethodDecl {
             name,
@@ -456,9 +457,9 @@ impl Parser {
 
         let is_let = self.consume_keyword("let");
         let pattern = if is_let {
-            self.parse_primary()? // novo método para suportar destructuring
+            self.parse_primary()? // suporte a destructuring
         } else {
-            self.parse_expr()? // para casos como `for (item of list)`
+            self.parse_expr()? // para casos como for (item of list)
         };
 
         if self.consume_keyword("in") {
@@ -468,9 +469,10 @@ impl Parser {
             return Some(Stmt::ForIn {
                 target: pattern,
                 object,
-                body: body,
+                body,
             });
         }
+
         if self.consume_keyword("of") {
             let iterable = self.parse_expr()?;
             self.expect(&Token::ParenClose);
@@ -478,40 +480,48 @@ impl Parser {
             return Some(Stmt::ForOf {
                 target: pattern,
                 iterable,
-                body: body,
+                body,
             });
         }
 
-        self.next(); // Token::Assign
-
         // fallback para for tradicional
-        let init = if is_let {
-            Stmt::Let {
+        let init = if self.check(&Token::Semicolon) {
+            None
+        } else if is_let {
+            self.next(); // Consume Token::Assign;
+            let value = self.parse_expr().unwrap_or(Expr::Literal(Literal::Null));
+            Some(Stmt::Let {
                 name: self.extract_identifier(&pattern)?,
-                value: self.parse_expr(),
-            }
+                value: value,
+            })
         } else {
-            self.parse_stmt()?
+            Some(self.parse_stmt()?)
         };
-
         self.expect(&Token::Semicolon);
 
-        let condition = self.parse_expr();
+        let condition = if self.check(&Token::Semicolon) {
+            None
+        } else {
+            Some(self.parse_expr()?)
+        };
         self.expect(&Token::Semicolon);
-        let update = self.parse_expr();
 
+        let update = if self.check(&Token::ParenClose) {
+            None
+        } else {
+            Some(self.parse_expr()?)
+        };
         self.expect(&Token::ParenClose);
 
         let body = self.parse_block();
 
         Some(Stmt::For {
-            init: Box::new(init),
+            init: init.map(Box::new)?,
             condition,
             update,
             body,
         })
     }
-
     fn extract_identifier(&mut self, expr: &Expr) -> Option<String> {
         match expr {
             Expr::Identifier(name) => Some(name.to_string()),
@@ -526,10 +536,10 @@ impl Parser {
             _ => return None,
         };
         self.expect(&Token::Assign);
-        let value = self.parse_expr()?;
+        let value = self.parse_expr();
         Some(Stmt::Let {
             name,
-            value: Some(value),
+            value: value.unwrap_or(Expr::Literal(Literal::Null)),
         })
     }
 
@@ -605,6 +615,8 @@ impl Parser {
     fn parse_return_stmt(&mut self) -> Option<Stmt> {
         self.next(); // consume "return"
         let value = if let Some(Token::BraceClose) = self.peek() {
+            None
+        } else if let Some(Token::Semicolon) = self.peek() {
             None
         } else {
             Some(self.parse_expr()?)
@@ -710,18 +722,6 @@ impl Parser {
         })
     }
 
-    // fn parse_this_expr(&mut self) -> Option<Expr> {
-    //     if self.peek() == Some(&Token::Dot) {
-    //         self.next(); // consume '.'
-    //         let property = match self.next()? {
-    //             Token::Identifier(name) => Expr::Identifier(name),
-    //             _ => return None,
-    //         };
-    //         Some(Expr::This(Some(Box::new(property))))
-    //     } else {
-    //         Some(Expr::This(None))
-    //     }
-    // }
     fn parse_postfix_expr(&mut self) -> Option<Expr> {
         let mut expr = self.parse_primary()?;
 
@@ -965,6 +965,26 @@ impl Parser {
             );
         }
         self.next(); // avança o cursor
+    }
+
+    fn insert_next(&mut self, token: Token) {
+        self.tokens.insert(self.pos, token);
+    }
+    #[track_caller]
+    fn expect_any(&mut self, expected: &[Token]) {
+        let caller = std::panic::Location::caller();
+        let location = format!("{}:{}", caller.file(), caller.line());
+
+        let current = self.peek();
+
+        if expected.iter().any(|t| Some(t) == current) {
+            self.next(); // avança o cursor se houver match
+        } else {
+            panic!(
+                "Unexpected token: {:?}, expected one of: {:?} {location}",
+                current, expected
+            );
+        }
     }
 
     fn is(&mut self, expected: &Token) -> bool {

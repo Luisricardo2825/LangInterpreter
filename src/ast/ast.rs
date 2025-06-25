@@ -1,8 +1,14 @@
+use std::cell::RefCell;
 use std::{collections::HashMap, rc::Rc};
 
-use crate::environment::values::Value;
+use serde::{Deserialize, Serialize};
+use yansi::Color;
+use yansi::Paint;
 
-#[derive(Debug, Clone, PartialEq)]
+use crate::environment::values::Value;
+use crate::environment::Environment;
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub enum Stmt {
     ImportNamed {
         items: Vec<(String, String)>, // (exported_name, local_name)
@@ -21,11 +27,11 @@ pub enum Stmt {
         items: Vec<(String, String)>,
         from: String,
     },
-    Export(Rc<Stmt>),        // Marca uma declaração como exportável
-    ExportDefault(Rc<Stmt>), // novo!
+    Export(Box<Stmt>),        // Marca uma declaração como exportável
+    ExportDefault(Box<Stmt>), // novo!
     Let {
         name: String,
-        value: Option<Expr>,
+        value: Expr,
     },
     FuncDecl(FunctionStmt),
     ClassDecl {
@@ -73,14 +79,14 @@ pub enum Stmt {
     Break,
     Continue,
 }
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct FunctionStmt {
     pub name: String,
     pub params: Vec<String>,
     pub vararg: Option<String>,
     pub body: Vec<Stmt>,
 }
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub enum Expr {
     Literal(Literal),
     Identifier(String),
@@ -126,13 +132,18 @@ pub enum Expr {
     Spread(Box<Expr>),
 }
 
-#[derive(Debug)]
+impl std::fmt::Display for Expr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.to_string().fmt(f)
+    }
+}
+#[derive(Debug, Clone)]
 pub enum ControlFlow<T: std::fmt::Debug> {
     Return(T),
     Break,
     Continue,
     None,
-    Error(Value),
+    Error(T),
 }
 
 pub fn debug_stmts(stmts: &[Stmt], indent: usize) {
@@ -141,42 +152,118 @@ pub fn debug_stmts(stmts: &[Stmt], indent: usize) {
     }
 }
 
+fn format_expr(expr: &Expr) -> String {
+    format!("{}", expr) // ou implemente um printer real
+}
+
 pub fn debug_stmt(stmt: &Stmt, indent: usize) {
     let pad = " ".repeat(indent);
+
+    // Cores distintas por tipo
+    let color_import = Color::Blue.bold();
+    let color_export = Color::Cyan.bold();
+    let color_let = Color::Green.bold();
+    let color_func = Color::Fixed(135).bold();
+    let color_class = Color::Red.bold();
+    let color_method = Color::Fixed(208).bold(); // Laranja
+    let color_control = Color::Fixed(214).bold(); // Amarelo queimado
+    let color_try = Color::Magenta.bold();
+    let color_throw = Color::Fixed(160).bold(); // Vermelho escuro
+    let color_expr = Color::White.bold();
+    let color_other = Color::Fixed(246); // Cinza claro
+    let color_symbol = Color::Fixed(240); // Cinza escuro
+    let color_name = Color::Fixed(151); // Verde-limão
+    let color_value = Color::Fixed(189);
+
     match stmt {
-        Stmt::ImportNamed { .. } => println!("{pad}Stmt::ImportNamed"),
-        Stmt::ImportDefault { .. } => println!("{pad}Stmt::ImportDefault"),
-        Stmt::ImportAll { .. } => println!("{pad}Stmt::ImportAll"),
-        Stmt::ImportMixed { .. } => println!("{pad}Stmt::ImportMixed"),
+        Stmt::ImportNamed { .. } => println!("{pad}{}", "Stmt::ImportNamed".paint(color_import)),
+        Stmt::ImportDefault { .. } => {
+            println!("{pad}{}", "Stmt::ImportDefault".paint(color_import))
+        }
+        Stmt::ImportAll { .. } => println!("{pad}{}", "Stmt::ImportAll".paint(color_import)),
+        Stmt::ImportMixed { .. } => println!("{pad}{}", "Stmt::ImportMixed".paint(color_import)),
+
         Stmt::Export(inner) => {
-            println!("{pad}Stmt::Export");
+            println!("{pad}{}", "Stmt::Export".paint(color_export));
             debug_stmt(inner, indent + 2);
         }
         Stmt::ExportDefault(inner) => {
-            println!("{pad}Stmt::ExportDefault");
+            println!("{pad}{}", "Stmt::ExportDefault".paint(color_export));
             debug_stmt(inner, indent + 2);
         }
-        Stmt::Let { .. } => println!("{pad}Stmt::Let"),
-        Stmt::FuncDecl(_) => println!("{pad}Stmt::FuncDecl"),
-        Stmt::ClassDecl { name, methods, .. } => {
-            println!("{pad}Stmt::ClassDecl ({name})");
-            for m in methods {
-                println!("{pad}  └── Stmt::ClassDecl::Method ({})", m.name);
+
+        Stmt::Let { name, value } => {
+            println!(
+                "{pad}{} {} = {}",
+                "Stmt::Let".paint(color_let),
+                name.paint(color_name),
+                format_expr(value).paint(color_value)
+            );
+        }
+
+        Stmt::Return(expr_opt) => {
+            if let Some(expr) = expr_opt {
+                println!(
+                    "{pad}{} {}",
+                    "Stmt::Return".paint(color_expr),
+                    format_expr(expr).paint(color_value)
+                );
+            } else {
+                println!("{pad}{}", "Stmt::Return".paint(color_expr));
             }
         }
-        Stmt::Method(m) => println!("{pad}Stmt::Method ({})", m.name),
+
+        Stmt::ExprStmt(expr) => {
+            println!(
+                "{pad}{} {}",
+                "Stmt::ExprStmt".paint(color_expr),
+                format_expr(expr).paint(color_value)
+            );
+        }
+        Stmt::FuncDecl(func) => println!(
+            "{pad}{} ({})",
+            "Stmt::FuncDecl".paint(color_func),
+            func.name.paint(color_name)
+        ),
+
+        Stmt::ClassDecl {
+            name: class_name,
+            methods,
+            ..
+        } => {
+            println!(
+                "{pad}{} ({})",
+                "Stmt::ClassDecl".paint(color_class),
+                class_name.paint(color_name)
+            );
+            for m in methods {
+                println!(
+                    "{pad}  {} {} ({})",
+                    "└──".paint(color_symbol),
+                    "Stmt::ClassDecl::Method".paint(color_method),
+                    m.name.paint(color_name)
+                );
+            }
+        }
+
+        Stmt::Method(m) => println!(
+            "{pad}{} ({})",
+            "Stmt::Method".paint(color_method),
+            m.name.paint(color_name)
+        ),
+
         Stmt::If {
             then_branch,
             else_ifs,
             else_branch,
             ..
         } => {
-            println!("{pad}Stmt::If");
+            println!("{pad}{}", "Stmt::If".paint(color_control));
             for s in then_branch {
                 debug_stmt(s, indent + 2);
             }
             for (_cond, block) in else_ifs {
-                println!("{pad}  ├── Stmt::ElseIf");
+                println!("{pad}  {}", "├── Stmt::ElseIf".paint(color_symbol));
                 if let Some(stmts) = block {
                     for s in stmts {
                         debug_stmt(s, indent + 4);
@@ -184,67 +271,161 @@ pub fn debug_stmt(stmt: &Stmt, indent: usize) {
                 }
             }
             if let Some(else_stmts) = else_branch {
-                println!("{pad}  └── Stmt::Else");
+                println!("{pad}  {}", "└── Stmt::Else".paint(color_symbol));
                 for s in else_stmts {
                     debug_stmt(s, indent + 4);
                 }
             }
         }
+
         Stmt::While { body, .. } => {
-            println!("{pad}Stmt::While");
+            println!("{pad}{}", "Stmt::While".paint(color_control));
             for s in body {
                 debug_stmt(s, indent + 2);
             }
         }
+
         Stmt::For { body, .. } => {
-            println!("{pad}Stmt::For");
+            println!("{pad}{}", "Stmt::For".paint(color_control));
             for s in body {
                 debug_stmt(s, indent + 2);
             }
         }
+
         Stmt::ForIn { body, .. } => {
-            println!("{pad}Stmt::ForIn");
+            println!("{pad}{}", "Stmt::ForIn".paint(color_control));
             for s in body {
                 debug_stmt(s, indent + 2);
             }
         }
+
         Stmt::ForOf { body, .. } => {
-            println!("{pad}Stmt::ForOf");
+            println!("{pad}{}", "Stmt::ForOf".paint(color_control));
             for s in body {
                 debug_stmt(s, indent + 2);
             }
         }
+
         Stmt::TryCatchFinally {
             try_block,
             catch_block,
             finally_block,
         } => {
-            println!("{pad}Stmt::Try");
-            for s in try_block {
-                debug_stmt(s, indent + 2);
+            println!("{pad}{}", "Stmt::Try".paint(color_try));
+            let size = try_block.len();
+
+            for (idx, s) in try_block.iter().enumerate() {
+                let ident_command = " ".repeat(indent);
+
+                // if is last
+                if idx + 1 == size {
+                    print!("{ident_command}└──");
+                    debug_stmt(s, 0);
+                } else {
+                    print!("{ident_command}├──");
+                    debug_stmt(s, 0); // +2 a partir do finally_pad
+                }
+                // debug_stmt(s, indent + 2);
             }
+
+            let has_finally = finally_block.is_some();
+
             if let Some((_name, catch_block)) = catch_block {
-                println!("{pad}  ├── Stmt::Catch");
-                for s in catch_block {
-                    debug_stmt(s, indent + 4);
+                let catch_indent = indent + 2;
+                let catch_pad = " ".repeat(catch_indent);
+                let symbol = if has_finally {
+                    "├──"
+                } else {
+                    "└──"
+                };
+                println!(
+                    "{catch_pad}{} {}",
+                    symbol.paint(color_symbol),
+                    "Stmt::Catch".paint(color_try)
+                );
+
+                let size = catch_block.len();
+                for (idx, s) in catch_block.iter().enumerate() {
+                    let ident_command = " ".repeat(catch_indent + 5);
+
+                    // if is last
+                    if idx + 1 == size {
+                        print!("{ident_command}└──");
+                        debug_stmt(s, 0);
+                    } else {
+                        print!("{ident_command}├──");
+                        debug_stmt(s, 0); // +2 a partir do finally_pad
+                    }
                 }
             }
+
             if let Some(finally_block) = finally_block {
-                println!("{pad}  └── Stmt::Finally");
-                for s in finally_block {
-                    debug_stmt(s, indent + 4);
+                let finally_indent = indent + 2;
+                let finally_pad = " ".repeat(finally_indent);
+                println!(
+                    "{finally_pad}{} {}",
+                    "└──".paint(color_symbol),
+                    "Stmt::Finally".paint(color_try)
+                );
+                let size = finally_block.len();
+                for (idx, s) in finally_block.iter().enumerate() {
+                    let ident_command = " ".repeat(finally_indent + 5);
+
+                    // if is last
+                    if idx + 1 == size {
+                        print!("{ident_command}└──");
+                        debug_stmt(s, 0);
+                    } else {
+                        print!("{ident_command}├──");
+                        debug_stmt(s, 0); // +2 a partir do finally_pad
+                    }
                 }
             }
         }
-        Stmt::Throw(_) => println!("{pad}Stmt::Throw"),
-        Stmt::ExprStmt(_) => println!("{pad}Stmt::ExprStmt"),
-        Stmt::Return(_) => println!("{pad}Stmt::Return"),
-        Stmt::Break => println!("{pad}Stmt::Break"),
-        Stmt::Continue => println!("{pad}Stmt::Continue"),
+        Stmt::Throw(_) => println!("{pad}{}", "Stmt::Throw".paint(color_throw)),
+        Stmt::Break => println!("{pad}{}", "Stmt::Break".paint(color_other)),
+        Stmt::Continue => println!("{pad}{}", "Stmt::Continue".paint(color_other)),
     }
 }
+impl<T: std::fmt::Debug + std::convert::From<std::string::String> + From<Value> + Clone>
+    ControlFlow<T>
+{
+    #[track_caller]
+    pub fn new_error(env: &mut Rc<RefCell<Environment>>, msg: String) -> ControlFlow<T> {
+        let location = std::panic::Location::caller().to_string()
+            + " "
+            + std::file!()
+            + ":"
+            + &std::line!().to_string();
+        let env = env.borrow();
+        let error_class = env.get("Error");
+        if error_class.is_none() {
+            panic!("Error class not found {msg} {location}")
+        }
+        let error_class = error_class.unwrap().to_class();
+        if error_class.is_none() {
+            panic!("Class 'Error' not found");
+        }
+        let error_class = error_class.unwrap();
 
-impl<T: std::fmt::Debug> ControlFlow<T> {
+        let throw_method = error_class.find_static_method("throw");
+
+        if throw_method.is_none() {
+            panic!("throw method not found");
+        }
+        let throw_method = throw_method.unwrap();
+
+        let error = throw_method.call(vec![Value::Null, Value::String(msg.into())]);
+
+        if error.is_err() {
+            panic!(
+                "Error creating error object {:?}",
+                error.unwrap().to_string()
+            );
+        }
+        let error = error.unwrap();
+        ControlFlow::Error(error.into())
+    }
     pub fn is_none(&self) -> bool {
         match self {
             ControlFlow::None => true,
@@ -257,10 +438,89 @@ impl<T: std::fmt::Debug> ControlFlow<T> {
             _ => true,
         }
     }
+
+    pub fn is_error(&self) -> bool {
+        matches!(self, ControlFlow::Error(_))
+    }
+
+    pub fn is_err(&self) -> bool {
+        matches!(self, ControlFlow::Error(_))
+    }
+
+    pub fn err(self) -> Option<T> {
+        match self {
+            ControlFlow::Error(msg) => Some(msg.into()),
+            _ => None,
+        }
+    }
+
+    #[track_caller]
     pub fn unwrap(self) -> T {
+        let location = std::panic::Location::caller().to_string()
+            + " "
+            + std::file!()
+            + ":"
+            + &std::line!().to_string();
         match self {
             ControlFlow::Return(value) => value,
+            other => panic!("Cannot unwrap {other:?} {location}"),
+        }
+    }
+
+    pub fn is_return(&self) -> bool {
+        matches!(self, ControlFlow::Return(_))
+    }
+    pub fn unwrap_err(self) -> T {
+        match self {
+            ControlFlow::Error(value) => value,
             other => panic!("Cannot unwrap {other:?}"),
+        }
+    }
+
+    pub fn as_error(&self) -> Option<ControlFlow<T>> {
+        match self {
+            ControlFlow::Return(msg) => Some(ControlFlow::Error(msg.to_owned())),
+            ControlFlow::Error(msg) => Some(ControlFlow::Error(msg.to_owned())),
+            _ => None,
+        }
+    }
+    pub fn unwrap_or(self, default: T) -> T {
+        match self {
+            ControlFlow::Return(value) => value,
+            _ => default,
+        }
+    }
+
+    pub fn unwrap_or_else<F>(self, f: F) -> T
+    where
+        F: FnOnce(ControlFlow<T>) -> T,
+    {
+        match self {
+            ControlFlow::Return(value) => value,
+            flow => f(flow),
+        }
+    }
+    pub fn unwrap_or_default(self) -> T
+    where
+        T: Default,
+    {
+        match self {
+            ControlFlow::Return(value) => value,
+            _ => Default::default(),
+        }
+    }
+
+    pub fn error(msg: String) -> ControlFlow<T> {
+        ControlFlow::Error(msg.into())
+    }
+
+    pub fn name(&self) -> String {
+        match self {
+            ControlFlow::None => "None".to_string(),
+            ControlFlow::Return(_) => "Return".to_string(),
+            ControlFlow::Error(_) => "Error".to_string(),
+            ControlFlow::Break => "Break".to_string(),
+            ControlFlow::Continue => "Continue".to_string(),
         }
     }
 }
@@ -385,15 +645,22 @@ impl Expr {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub enum AssignOperator {
-    Assign,    // =
-    AddAssign, // +=
-    SubAssign, // -=
-    MulAssign, // *=
-    DivAssign, // /=
-    ModAssign, // %=
-    PowAssign, // **=
+    // =
+    Assign,
+    // +=
+    AddAssign,
+    // -=
+    SubAssign,
+    // *=
+    MulAssign,
+    // /=
+    DivAssign,
+    // %=
+    ModAssign,
+    // **=
+    PowAssign,
 }
 impl AssignOperator {
     pub fn from_op(op: &str) -> Option<Self> {
@@ -424,7 +691,7 @@ impl std::fmt::Display for AssignOperator {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum Operator {
     Binary(BinaryOperator),
     Compare(CompareOperator),
@@ -432,7 +699,7 @@ pub enum Operator {
     Unary(UnaryOperator),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum BinaryOperator {
     Add,
     Subtract,
@@ -442,7 +709,21 @@ pub enum BinaryOperator {
     Exponentiate,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl BinaryOperator {
+    pub fn alias(&self) -> String {
+        match self {
+            BinaryOperator::Add => "add",
+            BinaryOperator::Subtract => "sub",
+            BinaryOperator::Multiply => "mul",
+            BinaryOperator::Divide => "div",
+            BinaryOperator::Modulo => "mod",
+            BinaryOperator::Exponentiate => "exp",
+        }
+        .to_string()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum CompareOperator {
     Eq,         // ==
     Ne,         // !=
@@ -454,13 +735,13 @@ pub enum CompareOperator {
     In,         // in
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum LogicalOperator {
     And,
     Or,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum UnaryOperator {
     Negative,
     Not,
@@ -470,7 +751,7 @@ pub enum UnaryOperator {
     Positive,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub enum Literal {
     Void,
     /// null.
@@ -487,7 +768,7 @@ pub enum Literal {
     Object(Vec<ObjectEntry>),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub enum ObjectEntry {
     Property { key: String, value: Expr },
     Shorthand(String),
@@ -564,40 +845,40 @@ impl Literal {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct MethodDecl {
     pub name: String,
     pub params: Vec<String>,
     pub vararg: Option<String>,
     pub body: Vec<Stmt>,
-    pub modifiers: Vec<MethodModifiers>,
+    pub modifiers: Vec<Modifiers>,
 }
 
 pub trait MethodModifiersOperations {
-    fn contains(&self, modifier: MethodModifiers) -> bool;
+    fn contains(&self, modifier: Modifiers) -> bool;
 
-    fn contains_all(&self, modifiers: Vec<MethodModifiers>) -> bool {
+    fn contains_all(&self, modifiers: Vec<Modifiers>) -> bool {
         modifiers.iter().all(|m| self.contains(m.clone()))
     }
-    fn contains_any(&self, modifiers: Vec<MethodModifiers>) -> bool {
+    fn contains_any(&self, modifiers: Vec<Modifiers>) -> bool {
         modifiers.iter().any(|m| self.contains(m.clone()))
     }
     fn contains_str(&self, modifier: &str) -> bool {
         match modifier.to_lowercase().as_str() {
-            "static" => self.contains(MethodModifiers::Static),
-            "operator" => self.contains(MethodModifiers::Operator),
-            "private" => self.contains(MethodModifiers::Private),
+            "static" => self.contains(Modifiers::Static),
+            "operator" => self.contains(Modifiers::Operator),
+            "private" => self.contains(Modifiers::Private),
             _ => false,
         }
     }
 }
-impl MethodModifiersOperations for [MethodModifiers] {
-    fn contains(&self, modifier: MethodModifiers) -> bool {
+impl MethodModifiersOperations for [Modifiers] {
+    fn contains(&self, modifier: Modifiers) -> bool {
         self.contains(&modifier)
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MethodModifiers {
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub enum Modifiers {
     Static,
     Operator,
     Private,
@@ -612,10 +893,7 @@ impl std::fmt::Display for Stmt {
 impl Stmt {
     pub fn to_string(&self) -> String {
         match self {
-            Stmt::Let { name, value } => match value {
-                Some(expr) => format!("let {} = {};", name, expr.to_string()),
-                None => format!("let {};", name),
-            },
+            Stmt::Let { name, value } => format!("let {} = {};", name, value.to_string()),
             Stmt::Return(Some(expr)) => format!("return {};", expr.to_string()),
             Stmt::Return(None) => "return;".to_string(),
             Stmt::ExprStmt(expr) => format!("{};", expr.to_string()),

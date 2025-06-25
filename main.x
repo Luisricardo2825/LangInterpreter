@@ -1,21 +1,32 @@
-import { Set } from "./examples/Native/Array.x";
+class Num {
+    value;
+    constructor(self, value) {
+        self.value = value;
+    }
+    valueOf(self) {
+        return self.value;
+    }
+    toString(self) {
+        return self.value;
+    }
+}
 
-let listaUnica = new Set(3, 2, 4, 1);
-let num = new Number(10);
+function treatArgs(...args) {
+    for (let arg of args) {
+        if (arg instanceof String) {
+            Io.println(typeof arg, arg, "é String");
+        } else if (arg instanceof Number) {
+            Io.println(typeof arg, arg, "é Number");
+        } else if (arg instanceof Num) {
+            Io.println(typeof arg, arg, "é Num");
+        } else if (arg instanceof Array) {
+            Io.println(typeof arg, arg, "é Array");
+        } else {
+            Io.println(arg, "é deconhecido");
+        }
+    }
+}
+let num1 = new Num(10);
 
-listaUnica.push(11);
-listaUnica.push(11);
-listaUnica.push(12);
-listaUnica.push("Teste");
-listaUnica.push("-1");
-listaUnica.push(11);
-listaUnica.push(11);
-// lista.push(13);
-listaUnica.sort();
-
-let object = { b: 10, c: "Teste", a: "Valor de A", $: 15, "[]": "Brackets([])" };
-object.a = 0;
-object.c = 20;
-object["%"] = 10;
-
-Io.println("Lista:", listaUnica, object, object["[]"], listaUnica.push, Array.push, num);
+// let n = new Teste("Ricardo", 10);
+treatArgs("a", "b", "c", 1, 2, 3, num1, [1, 2, 3]);

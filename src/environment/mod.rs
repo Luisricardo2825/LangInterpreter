@@ -1,56 +1,26 @@
+pub mod environment;
 pub mod helpers;
 pub mod native;
 pub mod stdlib;
+pub mod test;
 pub mod values;
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-use stdlib::{
-    array::NativeArrayClass, fs::fs::NativeFsClass, io::io::NativeIoClass,
-    json::json::NativeJsonClass,
-};
+use serde::{Deserialize, Serialize};
 use values::Value;
 
-#[derive(Clone, Debug)]
+use crate::{ast::ast::ControlFlow, environment::values::NativeObjectTrait};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Environment {
     pub variables: Vec<(String, Value)>,
     pub parent: Option<Rc<RefCell<Environment>>>,
 }
 
+// export "EnvironmentMap" as "Environment"
+
 fn global() -> Vec<(String, Value)> {
     let mut env: Vec<(String, Value)> = Vec::new();
-
-    // env.insert(
-    //     "print".to_string(),
-    //     Value::Builtin(|args: Vec<Value>| {
-    //         let mut s = String::new();
-    //         for arg in args {
-    //             s += &arg.to_string();
-    //             // Add space
-    //             s += " ";
-    //         }
-    //         // Remove last space
-    //         s.pop();
-    //         print!("{}", s);
-    //         Value::Void
-    //     }),
-    // );
-
-    // env.insert(
-    //     "println".to_string(),
-    //     Value::Builtin(|args: Vec<Value>| {
-    //         // Concat all args and print
-    //         let mut s = String::new();
-    //         for arg in args {
-    //             s += &arg.to_string();
-    //             // Add space
-    //             s += " ";
-    //         }
-    //         // Remove last space
-    //         s.pop();
-    //         println!("{}", s);
-    //         Value::Void
-    //     }),
-    // );
 
     env.push((
         "len".to_string(),
@@ -61,47 +31,45 @@ fn global() -> Vec<(String, Value)> {
         }),
     ));
 
-    // // input
-    // env.insert(
-    //     "input".to_string(),
-    //     Value::Builtin(|args: Vec<Value>| match &args[..] {
-    //         [Value::String(msg)] => {
-    //             print!("{}", msg);
-    //             std::io::stdout().flush().unwrap();
+    env.set_prop(
+        "forOf",
+        Value::Builtin(|args: Vec<Value>| match &args[..] {
+            [Value::Array(array), Value::Function(func)] => {
+                let mut ret = Value::Void;
+                for value in array.get_value().borrow().iter() {
+                    let result = func.call(vec![value.clone()]);
+                    match result {
+                        ControlFlow::Break => break,
+                        ControlFlow::Continue => continue,
+                        ControlFlow::None => {}
+                        ControlFlow::Error(err) => {
+                            return err;
+                        }
+                        ControlFlow::Return(val) => ret = val,
+                    };
+                }
+                ret
+            }
+            _ => Value::Null,
+        }),
+    )
+    .unwrap();
 
-    //             let mut input = String::new();
-    //             std::io::stdin().read_line(&mut input).unwrap();
-    //             Value::String(input.trim().to_string().into())
-    //         }
-    //         [Value::String(msg), value] => {
-    //             print!("{}", msg);
-    //             std::io::stdout().flush().unwrap();
-
-    //             let mut input = String::new();
-    //             std::io::stdin().read_line(&mut input).unwrap();
-    //             let input = input.trim();
-    //             if input.is_empty() {
-    //                 return value.clone();
-    //             }
-    //             Value::String(input.trim().to_string().into())
-    //         }
-    //         _ => Value::Null,
-    //     }),
-    // );
-
-    // env.insert(
-    //     "range".to_string(),
-    //     Value::Builtin(|args: Vec<Value>| match &args[..] {
-    //         [Value::Number(num1), Value::Number(num2)] => {
-    //             let mut array = Vec::new();
-    //             for i in *num1 as i64..*num2 as i64 {
-    //                 array.push(Value::Number(i as f64));
-    //             }
-    //             Value::array(array)
-    //         }
-    //         _ => Value::Null,
-    //     }),
-    // );
+    env.push((
+        "range".to_string(),
+        Value::Builtin(|args: Vec<Value>| match &args[..] {
+            [Value::Number(num1), Value::Number(num2)] => {
+                let num1 = num1.get_value();
+                let num2 = num2.get_value();
+                let mut array = Vec::new();
+                for i in num1 as i64..num2 as i64 {
+                    array.push(Value::Number(i.into()));
+                }
+                Value::array(array)
+            }
+            _ => Value::Null,
+        }),
+    ));
 
     env.push((
         "now".to_string(),
@@ -115,34 +83,21 @@ fn global() -> Vec<(String, Value)> {
         }),
     ));
 
-    env.push((
-        "Io".to_owned(),
-        Value::InternalClass(Rc::new(RefCell::new(NativeIoClass::new()))),
-    ));
-    env.push((
-        "Array".to_owned(),
-        Value::InternalClass(Rc::new(RefCell::new(NativeArrayClass::new()))),
-    ));
-    env.push((
-        "Fs".to_owned(),
-        Value::InternalClass(Rc::new(RefCell::new(NativeFsClass::new()))),
-    ));
-    env.push((
-        "Json".to_owned(),
-        Value::InternalClass(Rc::new(RefCell::new(NativeJsonClass::new()))),
-    ));
-    env.push((
-        "String".to_owned(),
-        Value::InternalClass(Rc::new(RefCell::new(
-            stdlib::string::NativeStringClass::new(),
-        ))),
-    ));
-    env.push((
-        "Number".to_owned(),
-        Value::InternalClass(Rc::new(RefCell::new(
-            stdlib::number::NativeNumberClass::new(),
-        ))),
-    ));
+    // Importa todos os modulos nativos declarados
+    for module_name in stdlib::list_modules() {
+        if let Some(native_class) = stdlib::get_module_by_name(module_name) {
+            // let borrow = native_class.borrow();
+            // let module = borrow.new();
+            let name = native_class.borrow().get_name().to_string();
+            let value = Value::InternalClass(native_class);
+
+            // println!("Declarando modulo {name} valor: {:?}", value.to_string());
+            env.push((name, value));
+        }
+    }
+    env.set_prop("NaN", Value::Number(f64::NAN.into())).unwrap();
+
+    // find "Io"
     env
 }
 
@@ -163,17 +118,17 @@ impl Environment {
         self.variables.extend(other.variables);
     }
 
-    pub fn new_enclosed(parent: Rc<RefCell<Environment>>) -> Self {
+    pub fn new_enclosed(parent: &mut Rc<RefCell<Environment>>) -> Self {
         Environment {
             variables: global(),
-            parent: Some(Rc::clone(&parent)),
+            parent: Some(Rc::clone(parent)),
         }
     }
 
-    pub fn new_rc_enclosed(parent: Rc<RefCell<Environment>>) -> Rc<RefCell<Environment>> {
+    pub fn new_rc_enclosed(parent: &mut Rc<RefCell<Environment>>) -> Rc<RefCell<Environment>> {
         Rc::new(RefCell::new(Environment {
             variables: global(),
-            parent: Some(Rc::clone(&parent)),
+            parent: Some(Rc::clone(parent)),
         }))
     }
 
@@ -185,7 +140,7 @@ impl Environment {
     pub fn rc_enclosed(&self, parent: Rc<RefCell<Environment>>) -> Rc<RefCell<Environment>> {
         Rc::new(RefCell::new(Environment {
             variables: global(),
-            parent: Some(Rc::clone(&parent)),
+            parent: Some(parent),
         }))
     }
 
@@ -197,14 +152,15 @@ impl Environment {
         self.variables.iter().any(|(n, _)| n == name)
     }
 
-    fn get_parent(&self) -> Option<Rc<RefCell<Environment>>> {
-        self.parent.clone()
+    pub fn get_parent(&self) -> Option<Rc<RefCell<Environment>>> {
+        self.parent.as_ref().and_then(|p| Some(p)).cloned()
     }
     pub fn get(&self, name: &str) -> Option<Value> {
         if let Some((_, v)) = self.variables.iter().find(|(n, _)| n == name) {
             Some(v.clone())
         } else if let Some(parent) = self.get_parent() {
-            parent.borrow().get(name)
+            let ret = parent.borrow().get(name);
+            ret
         } else {
             None
         }
@@ -235,23 +191,6 @@ impl Environment {
             *v = value;
             Ok(())
         } else if let Some(parent) = self.get_parent() {
-            if parent.borrow().exist("this") {
-                if let Some((_, v)) = parent
-                    .borrow_mut()
-                    .variables
-                    .iter_mut()
-                    .find(|(n, _)| n == "this")
-                {
-                    if let Value::Instance(instance) = v {
-                        instance
-                            .borrow()
-                            .this
-                            .borrow_mut()
-                            .assign(name, value.clone())
-                            .unwrap()
-                    }
-                }
-            }
             parent.borrow_mut().assign(name, value)
         } else {
             Err(format!("Variable '{}' not defined", name))
@@ -266,9 +205,11 @@ impl Environment {
         self.variables.extend(other.variables);
     }
 
-    pub fn with_parent(mut self, parent: Rc<RefCell<Environment>>) -> Self {
-        self.parent = Some(parent);
-        self
+    pub fn with_parent(&self, parent: Rc<RefCell<Environment>>) -> Environment {
+        Environment {
+            variables: self.variables.clone(), // ou shallow copy se possível
+            parent: Some(parent),
+        }
     }
 
     pub fn to_rc(&self) -> Rc<RefCell<Environment>> {

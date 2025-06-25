@@ -1,1 +1,1 @@
-pub mod fs;
+declare_modules_with_reexport!(fs);

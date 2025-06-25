@@ -1,9 +1,10 @@
+use core::f64;
 use std::{any::Any, cell::RefCell, collections::HashMap, rc::Rc, vec};
 
+use serde::{Deserialize, Serialize};
+
 use crate::{
-    ast::ast::{
-        BinaryOperator, ControlFlow, Expr, MethodModifiers, MethodModifiersOperations, Stmt,
-    },
+    ast::ast::{BinaryOperator, ControlFlow, Expr, MethodModifiersOperations, Modifiers, Stmt},
     environment::stdlib::number::NativeNumberClass,
     interpreter::Interpreter,
 };
@@ -14,7 +15,7 @@ use super::{
     Environment,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Value<T = String> {
     Void,                      // Primitivo
     Null,                      // Primitivo
@@ -29,16 +30,61 @@ pub enum Value<T = String> {
     Error(Rc<RefCell<Value>>),
 
     Class(Rc<Class>),
-    Method(Rc<Method>),
     Instance(Rc<RefCell<Instance>>),
 
-    This(Rc<Value>),
+    #[serde(skip)]
     Builtin(fn(Vec<Value>) -> Value), // função Rust nativa
+    #[serde(skip)]
     InternalClass(Rc<RefCell<dyn NativeCallable>>),
+    #[serde(skip)]
     InternalFunction((String, Rc<RefCell<dyn NativeCallable>>)),
 
     Internal(T),
     Expr(Expr),
+}
+
+impl Default for Value {
+    fn default() -> Self {
+        Value::Null
+    }
+}
+impl std::fmt::Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.to_string().fmt(f)
+    }
+}
+#[derive(Clone, Debug)]
+pub struct RuntimeError {
+    pub message: String,
+    pub line: usize,
+    pub column: usize,
+    pub file: String,
+}
+
+impl RuntimeError {
+    pub fn new(message: String, line: usize, column: usize, file: String) -> Self {
+        Self {
+            message,
+            line,
+            column,
+            file,
+        }
+    }
+}
+
+impl From<std::string::String> for Value {
+    fn from(value: std::string::String) -> Self {
+        Value::String(NativeStringClass::new_with_value(value))
+    }
+}
+
+impl From<Value> for String {
+    fn from(value: Value) -> Self {
+        match value {
+            Value::String(s) => s.get_value(),
+            _ => panic!("Cannot convert {:?} to String", value),
+        }
+    }
 }
 
 pub trait NativeObjectTrait {
@@ -105,9 +151,7 @@ impl PartialEq for Value {
             (Value::Object(a), Value::Object(b)) => Rc::ptr_eq(&*a, &*b),
             (Value::Function(a), Value::Function(b)) => Rc::ptr_eq(&*a, &*b),
             (Value::Class(a), Value::Class(b)) => Rc::ptr_eq(&*a, &*b),
-            (Value::Method(a), Value::Method(b)) => Rc::ptr_eq(&*a, &*b),
             (Value::Instance(a), Value::Instance(b)) => Rc::ptr_eq(&*a, &*b),
-            (Value::This(a), Value::This(b)) => Rc::ptr_eq(&*a, &*b),
             (Value::InternalClass(a), Value::InternalClass(b)) => Rc::ptr_eq(&*a, &*b),
             (Value::InternalFunction(a), Value::InternalFunction(b)) => {
                 let a = &a.1;
@@ -151,133 +195,7 @@ impl From<serde_json::Value> for Value {
         }
     }
 }
-
-#[derive(Debug, Clone)]
-pub struct Method {
-    pub name: String,
-    pub params: Vec<String>,
-    pub vararg: Option<String>,
-    pub body: Vec<Stmt>,
-    pub this: Rc<RefCell<Environment>>,
-    pub modifiers: Vec<MethodModifiers>,
-    pub class: String,
-    pub closure: Rc<RefCell<Environment>>,
-}
-
-impl Method {
-    pub fn new(
-        name: String,
-        params: Vec<String>,
-        vararg: Option<String>,
-        body: Vec<Stmt>,
-        this: Rc<RefCell<Environment>>,
-        modifiers: Vec<MethodModifiers>,
-        class: String,
-        closure: Rc<RefCell<Environment>>,
-    ) -> Method {
-        Method {
-            name,
-            params,
-            vararg,
-            body,
-            this,
-            modifiers,
-            class,
-            closure,
-        }
-    }
-
-    pub fn bind(&self, instance: Value) -> Method {
-        Method {
-            name: self.name.clone(),
-            params: self.params.clone(),
-            vararg: self.vararg.clone(),
-            body: self.body.clone(),
-            this: self.this.clone(),
-            modifiers: self.modifiers.clone(),
-            class: self.class.clone(),
-            closure: self.closure.clone(),
-        }
-        .with_this(instance)
-    }
-
-    fn with_this(self, instance: Value) -> Self {
-        self.this.borrow_mut().define("this".to_string(), instance);
-        self
-    }
-
-    pub fn call(&self, mut args: Vec<Value>, mut interpreter: Interpreter) -> Value {
-        let name = &self.name;
-        let params = &self.params;
-        let body = &self.body;
-        let vararg = &self.vararg;
-
-        let closure_rc = self.closure.clone();
-        let closure = closure_rc.borrow().clone(); // <- `Ref` de closure é solto aqui
-
-        let local_env = closure
-            .with_parent(self.this.clone()) // agora é seguro
-            .to_rc();
-
-        for idx in 0..params.len() {
-            let param = params.get(idx).unwrap();
-            let val = if !args.is_empty() {
-                args.remove(0)
-            } else {
-                Value::Null
-            };
-
-            local_env.borrow_mut().define(param.clone(), val);
-            // remove from param_value
-        }
-
-        if vararg.is_some() {
-            let vararg = vararg.as_ref().unwrap();
-            let vararg_name = vararg.clone();
-
-            let vararg_values = Value::array(args);
-            local_env.borrow_mut().define(vararg_name, vararg_values);
-        }
-        // local_env
-        //     .borrow_mut()
-        //     .merge_environments(env.borrow().clone());
-
-        for stmt in body {
-            match interpreter.eval_stmt(stmt, local_env.clone()) {
-                ControlFlow::Return(val) => return val,
-                ControlFlow::Break => {
-                    panic!("Break not allowed in function '{name}'")
-                }
-                ControlFlow::Continue => {
-                    panic!("Continue not allowed function '{name}'")
-                }
-                ControlFlow::None => {}
-                ControlFlow::Error(err) => panic!("{}", err.to_string()),
-            }
-        }
-
-        // //    local_env.borrow_mut().clear();
-        // if is_initializer {
-        //     return local_env
-        //         .borrow()
-        //         .get("this")
-        //         .unwrap_or(Value::Null)
-        //         .clone();
-        // }
-        Value::Void
-    }
-
-    pub fn is_static(&self) -> bool {
-        self.modifiers.contains(&MethodModifiers::Static)
-    }
-    pub fn is_private(&self) -> bool {
-        self.modifiers.contains(&MethodModifiers::Private)
-    }
-    pub fn is_operator(&self) -> bool {
-        self.modifiers.contains(&MethodModifiers::Operator)
-    }
-}
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Instance {
     pub this: Rc<RefCell<Environment>>,
     pub class: Rc<Class>,
@@ -287,18 +205,16 @@ impl Instance {
     pub fn get(&self, name: &str) -> Option<Value> {
         if let Some(method) = self.class.find_method(name) {
             // cria uma função com `this` já definido como essa instância
-            Some(Value::Method(Rc::new(
-                method.bind(Value::Instance(Rc::new(self.clone().into()))),
-            )))
+            Some(Value::Function(method))
         } else {
             self.this.borrow().get(name)
         }
     }
 
-    pub fn find_operation(&self, operator: &str) -> Option<Rc<Method>> {
+    pub fn find_operation(&self, operator: &str) -> Option<Rc<Function>> {
         let class = self.class.clone();
 
-        let method = class.find_method_with_modifiers(&operator, vec![MethodModifiers::Operator]);
+        let method = class.find_method_with_modifiers(&operator, vec![Modifiers::Operator]);
 
         if method.is_some() {
             return method;
@@ -319,17 +235,28 @@ impl Instance {
         }
     }
 
-    pub fn set(&mut self, name: &str, value: Value) {
-        self.class
-            .this
-            .borrow_mut()
-            .assign(&name, value.clone())
-            .unwrap();
+    pub fn set(&mut self, name: &str, value: Value) -> Result<(), String> {
+        let class_this = self.class.this.borrow_mut().assign(&name, value.clone());
 
-        self.this.borrow_mut().assign(&name, value).unwrap();
+        if class_this.is_err() {
+            return class_this;
+        }
+        let this = self.this.borrow_mut().assign(&name, value);
+
+        this
     }
-    pub fn get_to_string(&self) -> Option<Rc<Method>> {
+    pub fn get_to_string(&self) -> Option<Rc<Function>> {
         let method = self.class.find_method("toString");
+
+        if method.is_none() {
+            let method = self.class.get_value_of_method();
+            return method;
+        }
+        method
+    }
+
+    pub fn get_value_of(&self) -> Option<Rc<Function>> {
+        let method = self.class.find_method("valueOf");
 
         if method.is_none() {
             let method = self.class.get_value_of_method();
@@ -339,11 +266,11 @@ impl Instance {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Class {
     pub name: String,
-    pub methods: Vec<Rc<Method>>,
-    pub static_methods: Vec<Rc<Method>>,
+    pub methods: Vec<Rc<Function>>,
+    pub static_methods: Vec<Rc<Function>>,
 
     pub instance_variables: Rc<RefCell<HashMap<String, Value>>>,
     pub static_variables: HashMap<String, Value>,
@@ -357,10 +284,10 @@ pub struct Class {
 impl Class {
     pub fn new(
         name: String,
-        methods: Vec<Rc<Method>>,
+        methods: Vec<Rc<Function>>,
         superclass: Option<Rc<Class>>,
         this: Rc<RefCell<Environment>>,
-        static_methods: Vec<Rc<Method>>,
+        static_methods: Vec<Rc<Function>>,
         instance_variables: Rc<RefCell<HashMap<String, Value>>>,
         static_variables: HashMap<String, Value>,
         closure: Rc<RefCell<Environment>>,
@@ -388,12 +315,16 @@ impl Class {
         vars
     }
 
-    pub fn instantiate(class: &Rc<Class>, args: Vec<Value>, interpreter: Interpreter) -> Value {
+    pub fn instantiate(class: &Rc<Class>, mut args: Vec<Value>) -> ControlFlow<Value> {
         let this = Environment::new_rc();
         // let closure = interpreter.env.clone();
         this.borrow_mut().copy_from(class.this.clone());
         // this.borrow_mut().copy_from(interpreter.env.clone());
+        // let value = this.borrow().get("value");
 
+        // if value.is_some() {
+        //     println!("Value: {:?}", value.unwrap());
+        // }
         for (field_name, field_value) in class.instance_variables.borrow().clone() {
             this.borrow_mut()
                 .define(field_name.clone(), field_value.clone());
@@ -404,13 +335,7 @@ impl Class {
             if !method.is_static() {
                 let name = method.name.clone();
 
-                // let function_env = method.this.clone();
-
-                // function_env.borrow_mut().copy_from(this.clone());
-                // let this_method_env = function_env.borrow().clone();
-                method.this.replace(this.borrow().clone());
-
-                let body = Value::Method(method.to_owned().into());
+                let body = Value::Function(method.to_owned().into());
 
                 this.borrow_mut().define(name.clone(), body.clone());
             }
@@ -425,16 +350,24 @@ impl Class {
 
         let instance = Rc::new(RefCell::new(instance));
         let value = Value::Instance(instance.clone());
+        // add "value" at start
+        args.insert(0, value.clone());
         let constructor = class.get_constructor();
         if let Some(constructor) = constructor {
-            let constructor = constructor.bind(value.clone());
-            constructor.call(args, interpreter);
+            // let constructor = constructor.bind(value.clone());
+
+            // for (idx, ele) in args.iter().enumerate() {
+            //     println!("Argumento {idx} {ele} {}", class.name)
+            // }
+            let call = constructor.call(args);
+
+            return call;
         }
 
-        value
+        ControlFlow::Return(value)
     }
 
-    pub fn find_method(&self, name: &str) -> Option<Rc<Method>> {
+    pub fn find_method(&self, name: &str) -> Option<Rc<Function>> {
         for method in &self.methods {
             if method.name == name && method.modifiers.is_empty() {
                 return Some(method.clone());
@@ -445,8 +378,8 @@ impl Class {
     pub fn find_method_with_modifiers(
         &self,
         name: &str,
-        modifiers: Vec<MethodModifiers>,
-    ) -> Option<Rc<Method>> {
+        modifiers: Vec<Modifiers>,
+    ) -> Option<Rc<Function>> {
         for method in &self.methods {
             if method.name == name {
                 if method.modifiers.contains_all(modifiers.clone()) {
@@ -456,7 +389,7 @@ impl Class {
         }
         None
     }
-    pub fn find_constructor_with_args(&self, total_args: usize) -> Option<Rc<Method>> {
+    pub fn find_constructor_with_args(&self, total_args: usize) -> Option<Rc<Function>> {
         for method in &self.methods {
             if method.name == "constructor" && method.params.len() == total_args {
                 return Some(method.clone());
@@ -465,7 +398,7 @@ impl Class {
         None
     }
 
-    pub fn get_constructor(&self) -> Option<Rc<Method>> {
+    pub fn get_constructor(&self) -> Option<Rc<Function>> {
         for method in &self.methods {
             if method.name == "constructor" {
                 return Some(method.clone());
@@ -473,7 +406,7 @@ impl Class {
         }
         None
     }
-    pub fn find_static_method(&self, name: &str) -> Option<Rc<Method>> {
+    pub fn find_static_method(&self, name: &str) -> Option<Rc<Function>> {
         for method in &self.static_methods {
             if method.name == name {
                 return Some(method.clone());
@@ -497,7 +430,7 @@ impl Class {
         methods_names
     }
 
-    pub fn get_value_of_method(&self) -> Option<Rc<Method>> {
+    pub fn get_value_of_method(&self) -> Option<Rc<Function>> {
         for method in &self.methods {
             if method.name == "valueOf" {
                 return Some(method.clone());
@@ -511,9 +444,9 @@ impl Class {
 
     pub fn is_instance_of(instance: &Value, class: &Value) -> bool {
         match instance {
-            Value::Void => todo!(),
-            Value::Null => todo!(),
-            Value::Bool(_) => todo!(),
+            Value::Void => false,
+            Value::Null => false,
+            Value::Bool(_) => false,
             Value::Number(instance) => {
                 let native_class_rc = class.get_native_class(); // guarda o Rc
                 if native_class_rc.is_none() {
@@ -543,14 +476,25 @@ impl Class {
             }
             Value::Object(_ref_cell) => todo!(),
             Value::Function(_function) => todo!(),
-            Value::Class(this_class) => Rc::ptr_eq(this_class, &class.to_class()),
-            Value::Method(_method) => todo!(),
+            Value::Class(this_class) => {
+                let class = class.to_class();
+                if class.is_none() {
+                    return false;
+                }
+                let class = class.unwrap();
+                Rc::ptr_eq(this_class, &class)
+            }
             Value::Instance(instance) => {
                 let inst = instance.borrow();
                 let mut current = Some(&inst.class);
 
                 while let Some(cls) = current {
-                    if Rc::ptr_eq(cls, &class.to_class()) {
+                    let class = class.to_class();
+                    if class.is_none() {
+                        return false;
+                    }
+                    let class = class.unwrap();
+                    if Rc::ptr_eq(cls, &class) {
                         return true;
                     }
 
@@ -562,20 +506,23 @@ impl Class {
 
                 false
             }
-            Value::This(_value) => todo!(),
             Value::Builtin(_) => todo!(),
             Value::InternalClass(_ref_cell) => todo!(),
             Value::InternalFunction(_) => todo!(),
             Value::Internal(_) => todo!(),
+            Value::Error(erro) => {
+                let error = erro.borrow().clone();
+                Self::is_instance_of(&error, class)
+            }
             _ => panic!(
                 "is_instance_of: Value not supported: {:?}",
-                instance.to_string()
+                instance.type_of()
             ),
         }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Function {
     pub name: String,
     pub params: Vec<String>,
@@ -583,9 +530,11 @@ pub struct Function {
     pub body: Vec<Stmt>,
     pub environment: Rc<RefCell<Environment>>,
     pub prototype: Option<FunctionPrototype>,
+    pub modifiers: Vec<Modifiers>,
+    pub this: Value,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FunctionPrototype {
     pub name: String,
     pub params: Vec<String>,
@@ -604,15 +553,51 @@ impl Function {
         vararg: Option<String>,
         body: Vec<Stmt>,
         environment: Rc<RefCell<Environment>>,
-        prototype: Option<FunctionPrototype>,
+        modifiers: Vec<Modifiers>,
     ) -> Function {
-        Function {
+        let mut func = Function {
             name,
             params,
             vararg,
             body,
             environment,
-            prototype,
+            prototype: None,
+            modifiers,
+            this: Value::Null,
+        };
+        func.generate_proto();
+        func
+    }
+
+    pub fn unwrap(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            params: self.params.clone(),
+            vararg: self.vararg.clone(),
+            body: self.body.clone(),
+            environment: self.environment.clone(),
+            prototype: self.prototype.clone(),
+            modifiers: self.modifiers.clone(),
+            this: self.this.clone(),
+        }
+    }
+
+    pub fn with_this(&self, this: Value) -> Self {
+        let mut func = self.clone();
+        func.this = this;
+        func.generate_proto();
+        func
+    }
+    pub fn from(func: Rc<Function>) -> Self {
+        Self {
+            name: func.name.clone(),
+            params: func.params.clone(),
+            vararg: func.vararg.clone(),
+            body: func.body.clone(),
+            environment: func.environment.clone(),
+            prototype: func.prototype.clone(),
+            modifiers: func.modifiers.clone(),
+            this: func.this.clone(),
         }
     }
 
@@ -635,51 +620,95 @@ impl Function {
         body
     }
 
-    pub fn call(&self, mut args: Vec<Value>, mut interpreter: Interpreter) -> Value {
-        let env = interpreter.env.clone();
+    pub fn call(&self, mut args: Vec<Value>) -> ControlFlow<Value> {
         let name = &self.name;
-        let params = self.params.clone();
         let body = &self.body;
-        let vararg = &self.vararg;
+        let mut interpreter = Interpreter::new_empty();
 
-        let closure_rc = self.environment.clone();
-        let closure = closure_rc.borrow().clone(); // <- `Ref` de closure é solto aqui
+        let is_initializer = self.name == "constructor";
+        // let _guard = DepthGuard::new().map_err(|e| e.to_string())?;
 
-        let local_env = closure
-            .with_parent(env) // agora é seguro
-            .to_rc();
+        // let binding = self.environment.borrow();
+        let closure = self.environment.borrow(); // evita clone
 
-        for idx in 0..params.len() {
-            let param = params.get(idx).unwrap();
-            let val = args.remove(0);
+        let mut local_env = closure.to_rc();
 
+        // remove last arg
+        if !self.this.is_null() {
+            args.insert(0, self.this.clone());
+        }
+        let this = if is_initializer && args.len() > 0 {
+            args.first().unwrap().clone()
+        } else {
+            Value::Null
+        };
+        let mut args_iter = args.clone().into_iter();
+
+        // define parâmetros fixos
+        for param in &self.params {
+            let val = args_iter.next().unwrap_or(Value::Null);
+            // if param == "this" {
+            //     local_env.borrow_mut().define(param.clone(), this.clone());
+            //     println!(
+            //         "Definiu o this para {name} = {}, params: {:?}",
+            //         this, self.params
+            //     );
+            //     continue;
+            // }
             local_env.borrow_mut().define(param.clone(), val);
-            // remove from param_value
         }
 
-        if vararg.is_some() {
-            let vararg = vararg.as_ref().unwrap();
-            let vararg_name = vararg.clone();
-
-            let vararg_values = Value::array(args);
-            local_env.borrow_mut().define(vararg_name, vararg_values);
+        // define varargs (se houver)
+        if let Some(vararg_name) = &self.vararg {
+            let vararg_values = Value::array(args_iter.collect());
+            local_env
+                .borrow_mut()
+                .define(vararg_name.clone(), vararg_values);
         }
 
+        // Executa o corpo da função
         for stmt in body {
-            match interpreter.eval_stmt(stmt, local_env.clone()) {
-                ControlFlow::Return(val) => return val,
+            match interpreter.eval_stmt(stmt, &mut local_env) {
+                ControlFlow::Return(val) => {
+                    if val.is_void() {
+                        return ControlFlow::None;
+                    }
+                    return ControlFlow::Return(val);
+                }
                 ControlFlow::Break => {
-                    panic!("Break not allowed in function {name}")
+                    return ControlFlow::new_error(
+                        &mut local_env,
+                        format!("Break not allowed in function {}", name).into(),
+                    )
                 }
                 ControlFlow::Continue => {
-                    panic!("Continue not allowed in function {name}")
+                    return ControlFlow::new_error(
+                        &mut local_env,
+                        format!("Continue not allowed in function {}", name).into(),
+                    )
                 }
                 ControlFlow::None => {}
-                ControlFlow::Error(err) => panic!("{}", err.to_string()),
+                ControlFlow::Error(err) => {
+                    return ControlFlow::Error(err);
+                }
             }
         }
 
-        Value::Void
+        if is_initializer {
+            return ControlFlow::Return(this);
+        }
+
+        ControlFlow::None
+    }
+
+    pub fn is_static(&self) -> bool {
+        self.modifiers.contains(&Modifiers::Static)
+    }
+    pub fn is_private(&self) -> bool {
+        self.modifiers.contains(&Modifiers::Private)
+    }
+    pub fn is_operator(&self) -> bool {
+        self.modifiers.contains(&Modifiers::Operator)
     }
 }
 impl Value {
@@ -701,9 +730,7 @@ impl Value {
             (Value::Object(a), Value::Object(b)) => Rc::ptr_eq(&*a, &*b),
             (Value::Function(a), Value::Function(b)) => Rc::ptr_eq(&*a, &*b),
             (Value::Class(a), Value::Class(b)) => Rc::ptr_eq(&*a, &*b),
-            (Value::Method(a), Value::Method(b)) => Rc::ptr_eq(&*a, &*b),
             (Value::Instance(a), Value::Instance(b)) => Rc::ptr_eq(&*a, &*b),
-            (Value::This(a), Value::This(b)) => Rc::ptr_eq(&*a, &*b),
             (Value::InternalClass(a), Value::InternalClass(b)) => Rc::ptr_eq(&*a, &*b),
             (Value::InternalFunction(a), Value::InternalFunction(b)) => {
                 let a = &a.1;
@@ -763,25 +790,10 @@ impl Value {
         }
     }
 
-    pub fn call_op(
-        &self,
-        operator: BinaryOperator,
-        other: &Value,
-        interpreter: Interpreter,
-    ) -> Value {
-        match operator {
-            BinaryOperator::Add => self.resolve_op("plus", other, interpreter),
-            BinaryOperator::Subtract => self.resolve_op("sub", other, interpreter),
-            BinaryOperator::Multiply => self.resolve_op("mul", other, interpreter),
-            BinaryOperator::Divide => self.resolve_op("div", other, interpreter),
-            BinaryOperator::Modulo => self.resolve_op("mod", other, interpreter),
-            BinaryOperator::Exponentiate => self.resolve_op("exp", other, interpreter),
-        }
-    }
-
-    fn resolve_op(&self, op: &str, other: &Value, interpreter: Interpreter) -> Value {
+    pub fn call_op(&self, op: BinaryOperator, other: &Value) -> Value {
         let left = self.clone();
         let right = other.clone();
+        let op_alias = op.alias();
         if left.is_instance() || right.is_instance() {
             let instance = if left.is_instance() {
                 left.to_instance()
@@ -794,14 +806,36 @@ impl Value {
                 left.clone()
             };
 
-            let plus_method = instance.borrow().find_operation(op);
+            let plus_method = instance.borrow().find_operation(&op_alias);
             if let Some(method) = plus_method {
-                let args = vec![other.clone()];
-                return method.call(args, interpreter);
+                let args = vec![Value::Instance(instance), other.clone()];
+                let val = method.call(args);
+                if !val.is_err() {
+                    let val = val.unwrap();
+                    return val;
+                }
             }
         }
-        Value::String((left.to_string() + &right.to_string()).into())
+
+        match op {
+            BinaryOperator::Add => match (left, right) {
+                (Value::Number(a), Value::Number(b)) => Value::Number((a + b).into()),
+                (a, b) => Value::String(format!("{}{}", a, b).into()),
+            },
+            BinaryOperator::Subtract => {
+                Value::Number((left.to_number() - right.to_number()).into())
+            }
+            BinaryOperator::Multiply => {
+                Value::Number((left.to_number() * &right.to_number()).into())
+            }
+            BinaryOperator::Divide => Value::Number((left.to_number() / &right.to_number()).into()),
+            BinaryOperator::Modulo => Value::Number((left.to_number() % &right.to_number()).into()),
+            BinaryOperator::Exponentiate => {
+                Value::Number((left.to_number().powf(right.to_number())).into())
+            }
+        }
     }
+
     pub fn is_instance(&self) -> bool {
         match self {
             Value::Instance(_) => true,
@@ -822,7 +856,11 @@ impl Value {
                 let method = instance.borrow().class.get_value_of_method();
                 if method.is_some() {
                     let method = method.unwrap();
-                    let value = method.call(vec![], Interpreter::new_empty());
+                    let value = method.call(vec![]);
+                    if value.is_err() {
+                        return false;
+                    }
+                    let value = value.unwrap();
                     value.is_number()
                 } else {
                     false
@@ -877,7 +915,7 @@ impl Value {
     }
     pub fn is_method(&self) -> bool {
         match self {
-            Value::Method(_) => true,
+            Value::Function(_) => true,
             _ => false,
         }
     }
@@ -900,7 +938,6 @@ impl Value {
             Value::Builtin(_) => true,
             Value::Class(_) => true,
             Value::Instance { .. } => true,
-            Value::This(value) => value.is_truthy(),
             _ => false,
         }
     }
@@ -918,11 +955,9 @@ impl Value {
             Value::Builtin(_) => "function".to_string(),
             Value::Class(_) => "class".to_string(),
             Value::Instance { .. } => "object".to_string(),
-            Value::This(value) => value.type_of(),
-            Value::Method(_) => "function".to_string(),
             Value::InternalClass(_) => "class".to_string(),
             Value::InternalFunction(_) => "function".to_string(),
-            Value::Error(_) => "error".to_string(),
+            Value::Error(error) => error.borrow().type_of(),
             _ => "unknown".to_string(),
         }
     }
@@ -951,23 +986,13 @@ impl Value {
             Value::Class(class) => format!("<class {}>", class.name),
             Value::Instance(instance) => {
                 if let Some(method) = instance.borrow().get_to_string().as_ref() {
-                    let interpreter = Interpreter::new_empty();
                     let method = method.clone();
 
-                    let new_method = Method::new(
-                        method.name.clone(),
-                        method.params.clone(),
-                        method.vararg.clone(),
-                        method.body.clone(),
-                        method.this.clone(),
-                        method.modifiers.clone(),
-                        method.class.clone(),
-                        method.closure.clone(),
-                    );
-
-                    let with_this = new_method.with_this(Value::Instance(instance.clone()));
-
-                    let call = with_this.call(vec![], interpreter);
+                    let call = method.call(vec![self.clone()]);
+                    if call.is_err() {
+                        return call.err().unwrap().to_string();
+                    }
+                    let call = call.unwrap();
                     return call.to_string();
                 }
 
@@ -986,8 +1011,6 @@ impl Value {
 
                 Value::Object(Rc::new(RefCell::new(vars))).to_string()
             }
-            Value::This(value) => value.to_string(),
-            Value::Method(method) => format!("<function {}>", method.name),
             Value::InternalClass(c) => format!("<internal class {}>", c.borrow().get_name()),
             Value::InternalFunction(function) => format!("<internal function {}>", function.0),
             Value::Error(error) => error.borrow().to_string(),
@@ -1001,7 +1024,7 @@ impl Value {
             Value::Null => "null".to_string(),
             Value::Bool(b) => b.to_string(),
             Value::Number(n) => n.to_string(),
-            Value::String(s) => format!("\'{}\'", s.clone()),
+            Value::String(s) => format!("\"{}\"", s.clone()),
             Value::Array(a) => {
                 let mut s = "[".to_string();
                 for (i, v) in a.get_value().borrow().iter().enumerate() {
@@ -1028,8 +1051,6 @@ impl Value {
             Value::Builtin(_) => "<builtin>".to_string(),
             Value::Class(_) => "<class>".to_string(),
             Value::Instance(_) => self.convert_class_to_object().stringfy(),
-            Value::This(value) => value.stringfy(),
-            Value::Method(_) => "<function>".to_string(),
             Value::InternalClass(_) => "<class>".to_string(),
             Value::InternalFunction(_) => "<function>".to_string(),
             _ => "unknown".to_string(),
@@ -1046,26 +1067,6 @@ impl Value {
                 Value::Object(Rc::new(RefCell::new(map)))
             }
             Value::Instance(instance) => {
-                if let Some(method) = instance.borrow().get_to_string().as_ref() {
-                    let interpreter = Interpreter::new_empty();
-                    let method = method.clone();
-
-                    let new_method = Method::new(
-                        method.name.clone(),
-                        method.params.clone(),
-                        method.vararg.clone(),
-                        method.body.clone(),
-                        method.this.clone(),
-                        method.modifiers.clone(),
-                        method.class.clone(),
-                        method.closure.clone(),
-                    );
-
-                    return new_method
-                        .with_this(Value::Instance(instance.clone()))
-                        .call(vec![], interpreter);
-                }
-
                 let instance_vars = &instance.borrow().class.instance_variables;
                 let vars = instance.borrow().this.borrow().get_vars();
 
@@ -1098,8 +1099,7 @@ impl Value {
             Value::Builtin(_) => true,
             Value::Class(_) => true,
             Value::Instance { .. } => true,
-            Value::This(value) => value.to_bool(),
-            // Value::Method(_) => true,
+            // Value::Function(_) => true,
             _ => false,
         }
     }
@@ -1112,8 +1112,7 @@ impl Value {
             Value::Number(n) => n.get_value(),
             Value::String(s) => {
                 let s = s.get_value();
-                let msg = format!("Cannot convert string '{}' to number", s);
-                s.parse::<f64>().expect(&msg)
+                s.parse::<f64>().unwrap_or(f64::NAN)
             }
             Value::Bool(b) => {
                 if *b {
@@ -1125,9 +1124,13 @@ impl Value {
             Value::Instance(instance) => {
                 let value_of_method = instance.borrow().class.get_value_of_method();
                 if let Some(value_of_method) = value_of_method {
-                    value_of_method
-                        .call(vec![], Interpreter::new_empty())
-                        .to_number()
+                    let call = value_of_method.call(vec![]);
+
+                    if call.is_err() {
+                        return f64::NAN;
+                    }
+                    let call = call.unwrap();
+                    call.to_number()
                 } else {
                     f64::NAN
                 }
@@ -1150,16 +1153,13 @@ impl Value {
     }
 
     #[track_caller]
-    pub fn to_class(&self) -> Rc<Class> {
-        let caller = std::panic::Location::caller();
-        let location = format!("{}:{}", caller.file(), caller.line());
+    pub fn to_class(&self) -> Option<Rc<Class>> {
+        // let caller = std::panic::Location::caller();
+        // let location = format!("{}:{}", caller.file(), caller.line());
         match self {
-            Value::Class(class) => Rc::clone(class),
-            Value::Instance(instance) => instance.borrow().class.clone(),
-            _ => panic!(
-                "Cannot convert {} to class. called: {location}",
-                self.type_of()
-            ),
+            Value::Class(class) => Some(Rc::clone(class)),
+            Value::Instance(instance) => Some(instance.borrow().class.clone()),
+            _ => None,
         }
     }
 
@@ -1170,9 +1170,9 @@ impl Value {
         }
     }
 
-    pub fn to_method(&self) -> Rc<Method> {
+    pub fn to_method(&self) -> Rc<Function> {
         match self {
-            Value::Method(m) => m.clone(),
+            Value::Function(m) => m.clone(),
             _ => panic!("Cannot convert {} to method", self.type_of()),
         }
     }

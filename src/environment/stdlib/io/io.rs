@@ -1,8 +1,8 @@
 use std::io::Write;
 
 use crate::{
+    ast::ast::ControlFlow,
     environment::{native::native_callable::NativeCallable, Value},
-    interpreter::Interpreter,
 };
 
 #[derive(Debug, Clone)]
@@ -11,10 +11,6 @@ pub struct NativeIoClass {
 }
 
 impl NativeIoClass {
-    pub fn new() -> Self {
-        Self { args: vec![] }
-    }
-
     pub fn new_with_args(args: Vec<Value>) -> Self {
         Self { args }
     }
@@ -37,7 +33,7 @@ impl NativeIoClass {
             } // amarelo
             Value::Bool(b) => format!("\x1b[36m{}\x1b[0m", b),       // ciano
             Value::Null => format!("\x1b[90mnull\x1b[0m"),           // cinza
-            Value::Void => "".to_string(),
+            Value::Void => String::new(),
 
             Value::Array(arr) => {
                 let elements = arr
@@ -64,33 +60,25 @@ impl NativeIoClass {
                 format!("{{{}}}", props)
             }
             Value::Instance(instance) => {
-                let value_of_method = instance.clone().borrow().class.get_value_of_method();
-                if value_of_method.is_some() {
-                    let value_of_method = value_of_method.unwrap();
-                    let value = value_of_method.call(vec![], Interpreter::new_empty());
-                    return self.format_with_color(&value);
-                }
+                let value_of_method = instance.borrow().get_value_of(); // Usa o valueOf se existir
 
-                let class_name = instance.borrow().class.name.clone();
-                let props = instance
-                    .borrow()
-                    .class
-                    .instance_variables
-                    .borrow()
-                    .iter()
-                    .map(|(k, v)| {
-                        let key_colored = format!("\x1b[35m\"{}\"\x1b[0m", k); // roxo para chaves
-                        let val_colored = self.format_with_color(v);
-                        format!("{}: {}", key_colored, val_colored)
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("[{} {{{}}}]", class_name, props)
+                if value_of_method.is_some() {
+                    let value_of_method = value_of_method.unwrap().unwrap();
+                    let value = value_of_method.call(vec![val.clone()]);
+                    if !value.is_err() {
+                        let value = value.unwrap();
+
+                        return self.format_primitive_with_color(&value);
+                    }
+                }
+                let obj = val.convert_class_to_object();
+
+                self.format_primitive_with_color(&obj)
             }
             Value::Class(_) | Value::InternalClass(_) => {
                 format!("\x1b[34m{}\x1b[0m", val.to_string())
             } // azul para classes
-            Value::Function(_) | Value::InternalFunction(_) | Value::Method(_) => {
+            Value::Function(_) | Value::InternalFunction(_) => {
                 format!("\x1b[31m{}\x1b[0m", val.to_string())
             } // vermelho para funções
             other => format!("{}", other.to_string()), // fallback sem cor
@@ -99,7 +87,10 @@ impl NativeIoClass {
 }
 
 impl NativeCallable for NativeIoClass {
-    fn call_with_args(&self, method_name: &str, args: Vec<Value>) -> Result<Value, String> {
+    fn new() -> Self {
+        Self { args: vec![] }
+    }
+    fn call_with_args(&self, method_name: &str, args: Vec<Value>) -> ControlFlow<Value> {
         match method_name {
             "print" => match &args[..] {
                 _ => {
@@ -116,7 +107,7 @@ impl NativeCallable for NativeIoClass {
                         s.pop(); // Remove last space
                         print!("{}", s);
                     }
-                    Ok(Value::Void)
+                    ControlFlow::None
                 }
             },
             "println" => {
@@ -137,7 +128,7 @@ impl NativeCallable for NativeIoClass {
                     println!("{}", s);
                 }
 
-                Ok(Value::Void)
+                ControlFlow::None
             }
             "readln" => match &args[..] {
                 [Value::String(prompt)] => {
@@ -151,7 +142,7 @@ impl NativeCallable for NativeIoClass {
                     io::stdin().read_line(&mut buffer).unwrap();
                     std::io::stdout().flush().unwrap();
 
-                    Ok(Value::String(buffer.trim().to_string().into()))
+                    ControlFlow::Return(Value::String(buffer.trim().to_string().into()))
                 }
                 [Value::String(msg), value] => {
                     print!("{}", msg);
@@ -162,20 +153,22 @@ impl NativeCallable for NativeIoClass {
                     std::io::stdout().flush().unwrap();
                     let input = input.trim();
                     if input.is_empty() {
-                        return Ok(value.clone());
+                        return ControlFlow::Return(value.clone());
                     }
-                    Ok(Value::String(input.trim().to_string().into()))
+                    ControlFlow::Return(Value::String(input.trim().to_string().into()))
                 }
                 _ => {
                     std::io::stdout().flush().unwrap();
 
                     let mut input = String::new();
                     std::io::stdin().read_line(&mut input).unwrap();
-                    Ok(Value::String(input.trim().to_string().into()))
+                    ControlFlow::Return(Value::String(input.trim().to_string().into()))
                 }
             },
 
-            _ => Err(format!("Método nativo desconhecido: {}", method_name)),
+            _ => ControlFlow::Error(Value::String(
+                format!("Método nativo desconhecido: {}", method_name).into(),
+            )),
         }
     }
 
@@ -194,7 +187,7 @@ impl NativeCallable for NativeIoClass {
     }
 
     fn get_name(&self) -> String {
-        "Fs".to_string()
+        "Io".to_string()
     }
 
     fn is_static(&self) -> bool {
@@ -205,4 +198,8 @@ impl NativeCallable for NativeIoClass {
         self.args = args;
         Ok(())
     }
+}
+
+pub fn create_instance() -> NativeIoClass {
+    NativeIoClass::new()
 }

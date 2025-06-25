@@ -70,7 +70,7 @@ pub enum Token {
     // Throw,
 
     // Identificadores
-    #[regex(r"[a-zA-Z_$][a-zA-Z0-9_]*", parser_identifier)]
+    #[regex(r"[@a-zA-Z_$][a-zA-Z0-9_]*", parser_identifier)]
     Identifier(String),
 
     // Literais

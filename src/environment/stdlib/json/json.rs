@@ -1,4 +1,7 @@
-use crate::environment::{native::native_callable::NativeCallable, Value};
+use crate::{
+    ast::ast::ControlFlow,
+    environment::{native::native_callable::NativeCallable, Value},
+};
 
 #[derive(Debug, Clone)]
 pub struct NativeJsonClass {
@@ -6,10 +9,6 @@ pub struct NativeJsonClass {
 }
 
 impl NativeJsonClass {
-    pub fn new() -> Self {
-        Self { args: vec![] }
-    }
-
     pub fn new_with_args(args: Vec<Value>) -> Self {
         Self { args }
     }
@@ -19,23 +18,24 @@ impl NativeJsonClass {
 }
 
 impl NativeCallable for NativeJsonClass {
-    fn call(&self, method_name: &str) -> Result<Value, String> {
-        let args = self.get_args();
-
+    fn new() -> Self {
+        Self { args: vec![] }
+    }
+    fn call_with_args(&self, method_name: &str, args: Vec<Value>) -> ControlFlow<Value> {
         match method_name {
             "parse" => {
                 let json_string = args[0].to_string();
                 let json: serde_json::Value = serde_json::from_str(&json_string).unwrap();
-                Ok(Value::from(json))
+                ControlFlow::Return(Value::from(json))
             }
 
             "stringify" => {
                 let json = args[0].stringfy();
                 // let json_string = serde_json::to_string(&json).unwrap();
-                Ok(Value::String(json.into()))
+                ControlFlow::Return(Value::String(json.into()))
             }
 
-            _ => Err(format!("Método nativo desconhecido: {}", method_name)),
+            _ => ControlFlow::Error(format!("Método nativo desconhecido: {}", method_name).into()),
         }
     }
 
@@ -54,6 +54,14 @@ impl NativeCallable for NativeJsonClass {
     }
 
     fn get_name(&self) -> String {
-        "Json".to_string()
+        "JSON".to_string()
     }
+
+    fn is_static(&self) -> bool {
+        true
+    }
+}
+
+pub fn create_instance() -> NativeJsonClass {
+    NativeJsonClass::new()
 }

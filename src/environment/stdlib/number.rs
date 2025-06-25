@@ -1,14 +1,17 @@
 use std::{collections::HashMap, fmt::Display};
 
+use serde::{Deserialize, Serialize};
+
 use crate::{
-    ast::ast::{Expr, MethodDecl, Stmt},
+    ast::ast::{ControlFlow, Expr, MethodDecl, Stmt},
     environment::{
         helpers::class::ClassGenerator, native::native_callable::NativeCallable, values::Value,
     },
     impl_from_for_class, impl_logical_operations, impl_math_operations,
 };
 
-#[derive(Debug, Clone)]
+create_instance_fn!(NativeNumberClass);
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NativeNumberClass {
     pub args: Vec<Value>,
     pub value: Option<f64>,
@@ -16,13 +19,6 @@ pub struct NativeNumberClass {
 }
 
 impl NativeNumberClass {
-    pub fn new() -> Self {
-        Self {
-            args: vec![],
-            value: None,
-            is_static: true,
-        }
-    }
     pub fn new_with_value(value: f64) -> Self {
         Self {
             args: vec![],
@@ -127,7 +123,14 @@ impl Display for NativeNumberClass {
 
 #[allow(unused_assignments)]
 impl NativeCallable for NativeNumberClass {
-    fn call(&self, method_name: &str) -> Result<Value, String> {
+    fn new() -> Self {
+        Self {
+            args: vec![],
+            value: None,
+            is_static: true,
+        }
+    }
+    fn call(&self, method_name: &str) -> ControlFlow<Value> {
         let mut args = self.get_args();
         if args.len() < 1 && self.args.len() > 0 {
             args = self.args.clone();
@@ -136,14 +139,19 @@ impl NativeCallable for NativeNumberClass {
             "valueOf" => {
                 let arg = self.get_this();
 
-                Ok(Value::Number(arg.to_number().into()))
+                ControlFlow::Return(Value::Number(arg.to_number().into()))
             }
             "toString" => {
                 let arg = self.get_this();
 
-                Ok(Value::String(arg.to_string().into()))
+                ControlFlow::Return(Value::String(arg.to_string().into()))
             }
-            _ => Err(format!("Método nativo desconhecido: {}", method_name)),
+            "isNaN" => {
+                let arg = self.get_this();
+
+                ControlFlow::Return(Value::Bool(arg.to_number().is_nan()))
+            }
+            _ => ControlFlow::Error(format!("Método nativo desconhecido: {}", method_name).into()),
         }
     }
 

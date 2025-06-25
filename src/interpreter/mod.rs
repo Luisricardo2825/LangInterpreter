@@ -8,7 +8,7 @@ use crate::{
     },
     environment::{
         helpers::class::ClassGenerator,
-        values::{Class, Function, Method, NativeObjectTrait, Value},
+        values::{Class, Function, NativeObjectTrait, Value},
         Environment,
     },
     lexer::tokens::Token,
@@ -64,29 +64,22 @@ pub struct Interpreter {
     source: String,
     module_cache: HashMap<String, Rc<RefCell<Environment>>>,
     exported_symbols: HashMap<String, Value>,
-    pub env: Rc<RefCell<Environment>>,
 }
 
 impl Interpreter {
     pub fn new(source: String) -> Self {
-        let env = Environment::new_rc();
-        // let env = Rc::new(RefCell::new(Environment::new_enclosed(global.clone())));
         Self {
             source,
             module_cache: HashMap::new(),
             exported_symbols: HashMap::new(),
-            env: env,
         }
     }
 
     pub fn new_empty() -> Self {
-        let env = Environment::new_rc();
-
         Self {
             source: String::new(),
             module_cache: HashMap::new(),
             exported_symbols: HashMap::new(),
-            env,
         }
     }
 
@@ -119,7 +112,17 @@ impl Interpreter {
         let tokens = self.tokenize(src.clone(), filename.clone());
         let mut parser = Parser::new(tokens);
 
-        let default_classes = vec![ClassGenerator::create_error_class()];
+        let error_class = ClassGenerator::create_error_class();
+
+        let error_stmt_json = serde_json::to_string(&error_class);
+        if error_stmt_json.is_err() {
+            panic!("Error creating error class");
+        }
+        let error_stmt_json = error_stmt_json.unwrap();
+
+        let error_class: Stmt = serde_json::from_str(&error_stmt_json).unwrap();
+        let default_classes = vec![error_class];
+
         let mut ast = vec![];
 
         ast.extend(default_classes);
@@ -138,7 +141,7 @@ impl Interpreter {
         }
 
         if !generate_classes.is_empty() {
-            println!();
+            println!(); // Quebra linha
 
             // Write class to file in generate_classes
             for stmt in ast {
@@ -156,8 +159,10 @@ impl Interpreter {
             }
             return None;
         }
+        // let mut env = self.env.clone();
+        let mut env = Environment::new_rc();
         for stmt in ast {
-            let val = self.eval_stmt(&stmt, self.env.clone());
+            let val = self.eval_stmt(&stmt, &mut env);
             match val {
                 ControlFlow::Return(v) => return Some(v),
                 ControlFlow::Error(err) => {
@@ -174,6 +179,13 @@ impl Interpreter {
             .nth(1)
             .unwrap_or("./examples/trycatch.x".to_string());
         self.interpret_from_file(filename)
+    }
+
+    pub fn interpret_bench(&mut self) {
+        let start = std::time::Instant::now();
+        self.interpret();
+        let elapsed = start.elapsed();
+        println!("Elapsed: {:.2?}", elapsed);
     }
 
     fn get_absolute_path(path: &str) -> String {
@@ -202,12 +214,19 @@ impl Interpreter {
     }
 
     #[allow(unreachable_patterns)]
-    pub fn eval_expr(&mut self, expr: &Expr, env: Rc<RefCell<Environment>>) -> Value {
+    pub fn eval_expr(
+        &mut self,
+        expr: &Expr,
+        env: &mut Rc<RefCell<Environment>>,
+    ) -> ControlFlow<Value> {
         let ret = match expr {
             Expr::Identifier(name) => {
-                let value = self
-                    .resolve_variable(name, env)
-                    .unwrap_or_else(Value::error);
+                let value = self.resolve_variable(name, env);
+                if value.is_err() {
+                    return ControlFlow::new_error(env, value.unwrap_err());
+                }
+                let value = value.unwrap();
+
                 value
             }
             Expr::Literal(lit) => match lit {
@@ -222,7 +241,12 @@ impl Interpreter {
                     for entry in entries {
                         match entry {
                             ObjectEntry::Property { key, value } => {
-                                let val = self.eval_expr(value, env.clone());
+                                let val = self.eval_expr(value, env);
+                                if val.is_error() {
+                                    return val;
+                                }
+                                let val = val.unwrap();
+
                                 result.set_prop(&key, val).unwrap();
                             }
                             ObjectEntry::Shorthand(name) => {
@@ -231,7 +255,11 @@ impl Interpreter {
                                 result.set_prop(&name, val).unwrap();
                             }
                             ObjectEntry::Spread(expr) => {
-                                let val = self.eval_expr(expr, env.clone());
+                                let val = self.eval_expr(expr, env);
+                                if val.is_error() {
+                                    return val;
+                                }
+                                let val = val.unwrap();
                                 match val {
                                     Value::Object(map) => {
                                         let map = map.borrow_mut().clone();
@@ -241,7 +269,10 @@ impl Interpreter {
                                     }
                                     _ => {
                                         // opcional: erro em tempo de execução
-                                        panic!("Spread operator must be used with an object");
+                                        return ControlFlow::new_error(
+                                            env,
+                                            format!("Spread operator must be used with an object"),
+                                        );
                                     }
                                 }
                             }
@@ -253,71 +284,50 @@ impl Interpreter {
                 Literal::Array(arr) => {
                     let mut elements = Vec::new();
                     for elem in arr {
-                        let val = self.eval_expr(elem, env.clone());
+                        let val = self.eval_expr(elem, env);
+                        if val.is_error() {
+                            return val;
+                        }
+                        let val = val.unwrap();
                         elements.push(val);
                     }
                     Value::array(elements)
                 }
             },
             Expr::Block(stmts) => {
-                let local_env = Rc::new(RefCell::new(Environment::new_enclosed(env.clone())));
+                let mut local_env = Rc::new(RefCell::new(Environment::new_enclosed(env)));
                 for stmt in stmts {
-                    let ret = self.eval_stmt(stmt, local_env.clone());
+                    let ret = self.eval_stmt(stmt, &mut local_env);
                     match ret {
-                        ControlFlow::Return(value) => return value,
                         ControlFlow::Break => break,
                         ControlFlow::Continue => continue,
                         ControlFlow::None => {}
                         ControlFlow::Error(err) => {
-                            panic!("{:?}", err);
+                            return ControlFlow::Error(err);
                         }
+                        ret => return ret, // return
                     };
                 }
-                Value::Void
+                return ControlFlow::None;
             }
             Expr::BinaryOp { op, left, right } => {
-                let l = self.eval_expr(left, env.clone());
-                let r = self.eval_expr(right, env.clone());
+                let l = self.eval_expr(left, env);
+                let r = self.eval_expr(right, env);
+
+                if l.is_error() {
+                    return l;
+                }
+                if r.is_error() {
+                    return r;
+                }
+                let l = l.unwrap();
+                let r = r.unwrap();
+
                 match (op, l, r) {
-                    (Operator::Binary(math_op), left, right) => match math_op {
-                        BinaryOperator::Add => match (&left, &right) {
-                            (Value::String(a), Value::String(b)) => Value::String((a + b).into()),
-                            (Value::String(a), b) => Value::String(a + b.to_string()),
+                    (Operator::Binary(math_op), left, right) => {
+                        left.call_op(math_op.clone(), &right)
+                    }
 
-                            (Value::Number(a), Value::Number(b)) => Value::Number(a + b),
-
-                            (left, right) => left.call_op(math_op.clone(), right, self.clone()),
-                            _ => panic!("Invalid operands for +: {:?} and {:?}", left, right),
-                        },
-                        BinaryOperator::Subtract => {
-                            Value::Number((left.to_number() - right.to_number()).into())
-                        }
-                        BinaryOperator::Multiply => {
-                            Value::Number((left.to_number() * right.to_number()).into())
-                        }
-                        BinaryOperator::Divide => {
-                            Value::Number((left.to_number() / right.to_number()).into())
-                        }
-                        BinaryOperator::Exponentiate => {
-                            Value::Number(left.to_number().powf(right.to_number()).into())
-                        }
-                        BinaryOperator::Modulo => {
-                            Value::Number((left.to_number() % right.to_number()).into())
-                        }
-                    },
-                    // (
-                    //     Operator::Compare(comp_op),
-                    //     Value::Instance(instance),
-                    //     Value::Class(class),
-                    // ) => match comp_op {
-                    //     CompareOperator::InstanceOf => {
-                    //         return Value::Bool(Class::is_instance_of(
-                    //             &Value::Instance(instance),
-                    //             &Value::Class(class),
-                    //         ));
-                    //     }
-                    //     _ => Value::Bool(false),
-                    // },
                     (Operator::Compare(comp_op), a, b) => match comp_op {
                         CompareOperator::Eq => Value::Bool(a == b),
                         CompareOperator::Ne => Value::Bool(a != b),
@@ -326,7 +336,7 @@ impl Interpreter {
                         CompareOperator::Lt => Value::Bool(a < b),
                         CompareOperator::Le => Value::Bool(a <= b),
                         CompareOperator::InstanceOf => {
-                            return Value::Bool(Class::is_instance_of(&a, &b));
+                            return ControlFlow::Return(Value::Bool(Class::is_instance_of(&a, &b)));
                         }
                         CompareOperator::In => match (&a, &b) {
                             (Value::String(a), Value::Object(b)) => {
@@ -340,9 +350,19 @@ impl Interpreter {
                                 let item = b.get(idx);
                                 Value::Bool(item.is_some())
                             }
-                            _ => panic!("Invalid operands for 'in': {:?} and {:?}", a, b),
+                            _ => {
+                                return ControlFlow::new_error(
+                                    env,
+                                    format!("Invalid operands for 'in': {:?} and {:?}", a, b),
+                                )
+                            }
                         },
-                        _ => panic!("Invalid comparison operator: {:?}", comp_op),
+                        _ => {
+                            return ControlFlow::new_error(
+                                env,
+                                format!("Invalid comparison operator: {:?}", comp_op),
+                            )
+                        }
                     },
 
                     (Operator::Logical(log_op), Value::Bool(a), Value::Bool(b)) => match log_op {
@@ -350,11 +370,20 @@ impl Interpreter {
                         LogicalOperator::Or => Value::Bool(a || b),
                     },
 
-                    _ => Value::Null, // fallback
+                    _ => {
+                        return ControlFlow::new_error(
+                            env,
+                            format!("Operation not suported: {op:?}"),
+                        )
+                    } // fallback
                 }
             }
             Expr::UnaryOp { op, expr, postfix } => {
-                let val = self.eval_expr(expr, env.clone());
+                let val = self.eval_expr(expr, env);
+                if val.is_error() {
+                    return val;
+                }
+                let val = val.unwrap();
                 match op {
                     crate::ast::ast::UnaryOperator::Negative => {
                         Value::Number((-val.to_number()).into())
@@ -389,7 +418,10 @@ impl Interpreter {
                                     }
                                 }
                                 _ => {
-                                    panic!("Invalid value for increment: {:?}", expr)
+                                    return ControlFlow::new_error(
+                                        env,
+                                        format!("Invalid value for increment: {:?}", expr).into(),
+                                    )
                                 }
                             },
                             Expr::GetProperty { object, property } => {
@@ -398,7 +430,7 @@ impl Interpreter {
                                         object: object.clone(),
                                         property: property.clone(),
                                     },
-                                    env.clone(),
+                                    env,
                                 );
 
                                 let expr = &Expr::Assign {
@@ -412,15 +444,20 @@ impl Interpreter {
                                     value: Box::new(Expr::Literal(Literal::Number(new_val))),
                                 };
 
-                                let _ = self.eval_expr(expr, env.clone());
+                                let _ = self.eval_expr(expr, env);
 
                                 if *postfix {
-                                    previous_val
-                                } else {
-                                    Value::Number((new_val).into())
+                                    return previous_val;
                                 }
+
+                                return ControlFlow::Return(Value::Number((new_val).into()));
                             }
-                            _ => panic!("Invalid operand for increment: {:?}", expr),
+                            _ => {
+                                return ControlFlow::new_error(
+                                    env,
+                                    format!("Invalid operand for increment: {:?}", expr).into(),
+                                )
+                            }
                         }
                     }
                     crate::ast::ast::UnaryOperator::Decrement => {
@@ -451,7 +488,10 @@ impl Interpreter {
                                     }
                                 }
                                 _ => {
-                                    panic!("Invalid value for increment: {:?}", expr)
+                                    return ControlFlow::new_error(
+                                        env,
+                                        format!("Invalid value for increment: {:?}", expr).into(),
+                                    )
                                 }
                             },
                             Expr::GetProperty { object, property } => {
@@ -460,7 +500,7 @@ impl Interpreter {
                                         object: object.clone(),
                                         property: property.clone(),
                                     },
-                                    env.clone(),
+                                    env,
                                 );
 
                                 let expr = &Expr::Assign {
@@ -474,15 +514,20 @@ impl Interpreter {
                                     value: Box::new(Expr::Literal(Literal::Number(new_val))),
                                 };
 
-                                let _ = self.eval_expr(expr, env.clone());
+                                let _ = self.eval_expr(expr, env);
 
                                 if *postfix {
-                                    previous_val
-                                } else {
-                                    Value::Number((new_val).into())
+                                    return previous_val;
                                 }
+
+                                return ControlFlow::Return(Value::Number((new_val).into()));
                             }
-                            _ => panic!("Invalid operand for increment: {:?}", expr),
+                            _ => {
+                                return ControlFlow::new_error(
+                                    env,
+                                    format!("Invalid operand for increment: {:?}", expr).into(),
+                                )
+                            }
                         }
                     }
                     crate::ast::ast::UnaryOperator::Positive => {
@@ -491,14 +536,24 @@ impl Interpreter {
                 }
             }
             Expr::Call { callee, args } => {
-                let evaluated_callee = self.eval_expr(callee, env.clone());
+                let evaluated_callee = self.eval_expr(callee, env);
+
+                if evaluated_callee.is_error() {
+                    return evaluated_callee;
+                }
+
+                let evaluated_callee = evaluated_callee.unwrap();
 
                 let mut evaluated_args = vec![];
 
                 for arg_expr in args {
                     match arg_expr {
                         Expr::Spread(inner_expr) => {
-                            let val = self.eval_expr(&inner_expr, env.clone());
+                            let val = self.eval_expr(&inner_expr, env);
+                            if val.is_error() {
+                                return val;
+                            }
+                            let val = val.unwrap();
                             match val {
                                 Value::Array(arr) => {
                                     let arr = arr.get_value().clone();
@@ -510,67 +565,76 @@ impl Interpreter {
                                         evaluated_args.push(v);
                                     }
                                 }
-                                _ => panic!("Cannot spread {:?}", val.type_of()),
+                                _ => {
+                                    return ControlFlow::new_error(
+                                        env,
+                                        format!("Cannot spread {:?}", val.type_of()).into(),
+                                    )
+                                }
                             }
                         }
                         _ => {
-                            evaluated_args.push(self.eval_expr(&arg_expr, env.clone()));
+                            let val = self.eval_expr(&arg_expr, env);
+                            if val.is_error() {
+                                return val;
+                            }
+                            let val = val.unwrap();
+                            evaluated_args.push(val);
                         }
                     }
                 }
 
                 match evaluated_callee {
-                    Value::Function(func) => func.call(evaluated_args, self.clone()),
-                    Value::Method(method) => method.call(evaluated_args, self.clone()),
+                    Value::Function(func) => {
+                        let call = func.call(evaluated_args);
+
+                        match call {
+                            ControlFlow::Return(val) => val,
+                            ret => {
+                                return ret;
+                            }
+                        }
+                    }
 
                     Value::Builtin(func) => func(evaluated_args),
                     Value::InternalFunction((name, native_class)) => {
                         let mut new_args = native_class.borrow().get_args();
                         let is_static = native_class.borrow().is_static();
 
-                        if is_static {
-                            let call = native_class.borrow().call_with_args(&name, evaluated_args);
-                            match call {
-                                Ok(val) => return val,
-                                Err(err) => {
-                                    return Value::error(err);
-                                }
+                        let call = if is_static {
+                            native_class.borrow().call_with_args(&name, evaluated_args)
+                        } else {
+                            // concat new_args and arg_values
+                            new_args.extend(evaluated_args.clone());
+
+                            match native_class.borrow_mut().add_args(new_args) {
+                                Ok(_) => {}
+                                Err(err) => return ControlFlow::new_error(env, err),
                             }
-                        }
 
-                        // concat new_args and arg_values
-                        new_args.extend(evaluated_args.clone());
+                            let native_method = native_class.borrow().call(&name);
+                            native_method
+                        };
 
-                        match native_class.borrow_mut().add_args(new_args) {
-                            Ok(_) => {}
-                            Err(err) => return Value::error(err),
-                        }
-
-                        let native_method = native_class.borrow().call(&name);
-
-                        if native_method.is_ok() {
-                            return native_method.unwrap();
-                        }
-                        let val = native_class.borrow().get_custom_method(&name);
-
-                        if val.is_none() {
-                            return Value::error(format!("{} is not a function", name));
-                        }
-                        let val = val.unwrap();
-
-                        match val {
-                            Value::Function(function) => {
-                                function.call(evaluated_args, self.clone())
-                            }
-                            Value::Method(method) => method.call(evaluated_args, self.clone()),
-                            _ => val,
-                        }
+                        return call;
                     }
-                    _ => panic!("'{}' is not a function", self.resolve_calle_name(callee)),
+                    _ => {
+                        return ControlFlow::new_error(
+                            env,
+                            format!("'{}' is not a function", self.resolve_calle_name(callee))
+                                .into(),
+                        )
+                    }
                 }
             }
             Expr::Assign { target, op, value } => {
-                let val = self.eval_expr(value, env.clone());
+                let val = self.eval_expr(value, env);
+
+                if val.is_error() {
+                    return val;
+                }
+
+                let val = val.unwrap();
 
                 match &**target {
                     Expr::Identifier(name) => {
@@ -595,14 +659,19 @@ impl Interpreter {
                                         let mut a = a.borrow_mut();
                                         let b = b.get_value();
                                         let b = b.borrow();
-                                        a.extend(b.clone());
+                                        a.extend(b.to_owned());
                                     }
 
                                     (Value::Class(class), Value::Number(num)) => {
                                         let value_of_method = class.get_value_of_method();
                                         if value_of_method.is_some() {
                                             let value_of_method = value_of_method.unwrap();
-                                            let value = value_of_method.call(vec![], self.clone());
+                                            let value = value_of_method.call(vec![]);
+                                            if value.is_err() {
+                                                let error = value.unwrap_err();
+                                                return ControlFlow::Error(error.into());
+                                            }
+                                            let value = value.unwrap();
                                             if value.is_number() {
                                                 let value = value.to_number() + num.get_value();
                                                 env.borrow_mut()
@@ -617,12 +686,21 @@ impl Interpreter {
                                             instance.borrow().find_operation("plus");
                                         if operator_plus_method.is_some() {
                                             let method = operator_plus_method.unwrap();
-
-                                            return method.call(vec![b.clone()], self.clone());
+                                            let call = method.call(vec![b.clone()]);
+                                            if call.is_err() {
+                                                let error = call.unwrap_err();
+                                                return ControlFlow::Error(error.into());
+                                            }
+                                            let call = call.unwrap();
+                                            return ControlFlow::Return(call);
                                         }
-                                        return Value::error(format!(
-                                            "operator not implemented for '{class_name}' class"
-                                        ));
+                                        return ControlFlow::new_error(
+                                            env,
+                                            format!(
+                                                "operator not implemented for '{class_name}' class {op}",
+                                            )
+                                            .into(),
+                                        );
                                     }
                                     (a, b) => {
                                         let a = a.to_string();
@@ -633,12 +711,18 @@ impl Interpreter {
                                             .assign(name, Value::String((a + &b).into()))
                                             .unwrap();
                                     }
-                                    _ => panic!(
-                                        "Invalid operation: {:?} {} {:?}",
-                                        old_value.type_of(),
-                                        op,
-                                        new_value.type_of()
-                                    ),
+                                    _ => {
+                                        return ControlFlow::new_error(
+                                            env,
+                                            format!(
+                                                "Invalid operation: {:?} {} {:?}",
+                                                old_value.type_of(),
+                                                op,
+                                                new_value.type_of()
+                                            )
+                                            .into(),
+                                        )
+                                    }
                                 }
                             }
                             crate::ast::ast::AssignOperator::SubAssign => {
@@ -662,12 +746,18 @@ impl Interpreter {
                                             .unwrap();
                                     }
 
-                                    _ => panic!(
-                                        "Invalid operation: {:?} {} {:?}",
-                                        old_value.type_of(),
-                                        op,
-                                        new_value.type_of()
-                                    ),
+                                    _ => {
+                                        return ControlFlow::new_error(
+                                            env,
+                                            format!(
+                                                "Invalid operation: {:?} {} {:?}",
+                                                old_value.type_of(),
+                                                op,
+                                                new_value.type_of()
+                                            )
+                                            .into(),
+                                        )
+                                    }
                                 }
                             }
                             crate::ast::ast::AssignOperator::MulAssign => {
@@ -686,12 +776,18 @@ impl Interpreter {
                                             )
                                             .unwrap();
                                     }
-                                    _ => panic!(
-                                        "Invalid operation: {:?} {} {:?}",
-                                        old_value.type_of(),
-                                        op,
-                                        new_value.type_of()
-                                    ),
+                                    _ => {
+                                        return ControlFlow::new_error(
+                                            env,
+                                            format!(
+                                                "Invalid operation: {:?} {} {:?}",
+                                                old_value.type_of(),
+                                                op,
+                                                new_value.type_of()
+                                            )
+                                            .into(),
+                                        )
+                                    }
                                 }
                             }
                             crate::ast::ast::AssignOperator::DivAssign => {
@@ -710,12 +806,18 @@ impl Interpreter {
                                             )
                                             .unwrap();
                                     }
-                                    _ => panic!(
-                                        "Invalid operation: {:?} {} {:?}",
-                                        old_value.type_of(),
-                                        op,
-                                        new_value.type_of()
-                                    ),
+                                    _ => {
+                                        return ControlFlow::new_error(
+                                            env,
+                                            format!(
+                                                "Invalid operation: {:?} {} {:?}",
+                                                old_value.type_of(),
+                                                op,
+                                                new_value.type_of()
+                                            )
+                                            .into(),
+                                        )
+                                    }
                                 }
                             }
                             crate::ast::ast::AssignOperator::ModAssign => {
@@ -734,12 +836,18 @@ impl Interpreter {
                                             )
                                             .unwrap();
                                     }
-                                    _ => panic!(
-                                        "Invalid operation: {:?} {} {:?}",
-                                        old_value.type_of(),
-                                        op,
-                                        new_value.type_of()
-                                    ),
+                                    _ => {
+                                        return ControlFlow::new_error(
+                                            env,
+                                            format!(
+                                                "Invalid operation: {:?} {} {:?}",
+                                                old_value.type_of(),
+                                                op,
+                                                new_value.type_of()
+                                            )
+                                            .into(),
+                                        )
+                                    }
                                 }
                             }
                             crate::ast::ast::AssignOperator::PowAssign => {
@@ -758,22 +866,40 @@ impl Interpreter {
                                             )
                                             .unwrap();
                                     }
-                                    _ => panic!(
-                                        "Invalid operation: {:?} {} {:?}",
-                                        old_value.type_of(),
-                                        op,
-                                        new_value.type_of()
-                                    ),
+                                    _ => {
+                                        return ControlFlow::new_error(
+                                            env,
+                                            format!(
+                                                "Invalid operation: {:?} {} {:?}",
+                                                old_value.type_of(),
+                                                op,
+                                                new_value.type_of()
+                                            )
+                                            .into(),
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
                     Expr::GetProperty { object, property } => {
                         // atribuição a propriedade: obj.prop = val
-                        let obj = self.eval_expr(object, env.clone());
+                        let obj = self.eval_expr(object, env);
+
+                        if obj.is_error() {
+                            return obj;
+                        }
+
+                        let obj = obj.unwrap();
+
                         let key = match &**property {
                             Expr::Identifier(name) => name.clone(),
-                            _ => panic!("Propriedade inválida"),
+                            _ => {
+                                return ControlFlow::new_error(
+                                    env,
+                                    format!("Propriedade inválida").into(),
+                                )
+                            }
                         };
 
                         match op {
@@ -783,27 +909,122 @@ impl Interpreter {
                                 }
 
                                 Value::Instance(instance) => {
-                                    // let previous_value = instance.borrow().get(&key);
-
-                                    // if previous_value.is_some() {
-                                    //     println!("previous_value: {:?}", previous_value);
-                                    // }
-
-                                    instance.borrow_mut().set(&key, val.clone());
+                                    let set_result = instance.borrow_mut().set(&key, val.clone());
+                                    if set_result.is_err() {
+                                        let error = set_result.unwrap_err();
+                                        return ControlFlow::new_error(env, error.into());
+                                    }
                                 }
                                 Value::InternalClass(class) => {
                                     class.borrow_mut().add_custom_method(key, val).unwrap();
                                 }
-                                _ => panic!("Não é um objeto {:?}", obj),
+
+                                Value::Error(error) => {
+                                    let obj = error.borrow();
+
+                                    if obj.is_instance() {
+                                        let instance = obj.to_instance();
+                                        let set_result =
+                                            instance.borrow_mut().set(&key, val.clone());
+                                        if set_result.is_err() {
+                                            let error = set_result.unwrap_err();
+                                            return ControlFlow::new_error(env, error.into());
+                                        }
+                                        return ControlFlow::None;
+                                    }
+
+                                    return ControlFlow::new_error(
+                                        env,
+                                        format!("'{}' not found in '{}'", key, obj.type_of())
+                                            .into(),
+                                    );
+                                }
+                                ret => {
+                                    return ControlFlow::new_error(
+                                        env,
+                                        format!("'{}' not found in '{}'", key, ret.type_of())
+                                            .into(),
+                                    );
+                                }
                             },
-                            _ => todo!("Not supported"),
+                            crate::ast::ast::AssignOperator::PowAssign => {
+                                let old_value = env.borrow().get(&key);
+                                let old_value = old_value.unwrap_or(Value::Null);
+                                let new_value = val;
+
+                                match (&old_value, &new_value) {
+                                    (a, b) => {
+                                        env.borrow_mut()
+                                            .assign(
+                                                &key,
+                                                Value::Number(
+                                                    (a.to_number().powf(b.to_number())).into(),
+                                                ),
+                                            )
+                                            .unwrap();
+                                    }
+                                    _ => {
+                                        return ControlFlow::new_error(
+                                            env,
+                                            format!(
+                                                "Invalid operation: {:?} {} {:?}",
+                                                old_value.type_of(),
+                                                op,
+                                                new_value.type_of()
+                                            )
+                                            .into(),
+                                        )
+                                    }
+                                }
+                            }
+                            crate::ast::ast::AssignOperator::MulAssign => {
+                                let old_value = env.borrow().get(&key);
+                                let old_value = old_value.unwrap_or(Value::Null);
+                                let new_value = val;
+
+                                match (&old_value, &new_value) {
+                                    (a, b) => {
+                                        env.borrow_mut()
+                                            .assign(
+                                                &key,
+                                                Value::Number(
+                                                    (a.to_number() * b.to_number()).into(),
+                                                ),
+                                            )
+                                            .unwrap();
+                                    }
+                                    _ => {
+                                        return ControlFlow::new_error(
+                                            env,
+                                            format!(
+                                                "Invalid operation: {:?} {} {:?}",
+                                                old_value.type_of(),
+                                                op,
+                                                new_value.type_of()
+                                            )
+                                            .into(),
+                                        )
+                                    }
+                                }
+                            }
+                            _ => todo!("Not supported {expr}"),
                         }
                     }
                     Expr::BracketAccess { object, property } => {
                         // atribuição por índice: arr[i] = val
-                        // println!("Object: {}", object.to_string());
-                        let arr = self.eval_expr(object, env.clone());
-                        let index = self.eval_expr(property, env.clone());
+                        let arr = self.eval_expr(object, env);
+
+                        if arr.is_error() {
+                            return arr;
+                        }
+                        let arr = arr.unwrap();
+
+                        let index = self.eval_expr(property, env);
+
+                        if index.is_error() {
+                            return index;
+                        }
+                        let index = index.unwrap();
 
                         match op {
                             crate::ast::ast::AssignOperator::Assign => match (arr, index) {
@@ -824,7 +1045,16 @@ impl Interpreter {
                                         .set_prop(&key.to_string(), val.clone())
                                         .unwrap();
                                 }
-                                ac => panic!("Acesso inválido para atribuição {:?}", ac),
+                                (Value::Object(obj), Value::Number(key)) => {
+                                    let key = key.get_value() as usize;
+                                    obj.borrow_mut().push((key.to_string(), val.clone()));
+                                }
+                                ac => {
+                                    return ControlFlow::new_error(
+                                        env,
+                                        format!("Acesso inválido para atribuição {:?}", ac).into(),
+                                    )
+                                }
                             },
                             crate::ast::ast::AssignOperator::AddAssign => match (arr, index) {
                                 (Value::Array(array), Value::Number(n)) => {
@@ -842,6 +1072,11 @@ impl Interpreter {
                                             *value.clone(),
                                         );
                                         let new_value = self.eval_expr(&add_expr, env);
+                                        if new_value.is_error() {
+                                            return new_value;
+                                        }
+                                        let new_value = new_value.unwrap();
+
                                         array[idx] = new_value;
                                     } else {
                                         array.push(val.clone());
@@ -859,6 +1094,12 @@ impl Interpreter {
                                         );
                                         let new_value = self.eval_expr(&add_expr, env);
 
+                                        if new_value.is_error() {
+                                            return new_value;
+                                        }
+
+                                        let new_value = new_value.unwrap();
+
                                         obj.borrow_mut()
                                             .set_prop(&key.to_string(), new_value)
                                             .unwrap();
@@ -868,30 +1109,44 @@ impl Interpreter {
                                             .unwrap();
                                     }
                                 }
-                                ac => panic!("Acesso inválido para atribuição {:?}", ac),
+                                ac => {
+                                    return ControlFlow::new_error(
+                                        env,
+                                        format!("Acesso inválido para atribuição {:?}", ac).into(),
+                                    )
+                                }
                             },
                             _ => todo!("Not supported"),
                         }
                     }
-                    _ => panic!("Expressão inválida no lado esquerdo da atribuição"),
+                    _ => {
+                        return ControlFlow::new_error(
+                            env,
+                            format!("Expressão inválida no lado esquerdo da atribuição").into(),
+                        )
+                    }
                 }
 
-                Value::Void
+                return ControlFlow::None;
             }
             Expr::GetProperty { object, property } => {
-                let mut obj = self.eval_expr(object, env.clone());
+                let obj = self.eval_expr(object, env);
+                if obj.is_error() {
+                    return obj;
+                }
+                let mut obj = obj.unwrap();
 
                 let prop = match property.as_ref() {
                     Expr::Identifier(name) => Value::String(name.to_string().into()),
                     Expr::Literal(Literal::Number(n)) => Value::Number(n.into()),
                     Expr::Literal(Literal::String(s)) => Value::String(s.clone().into()),
-                    _ => return Value::Null,
+                    _ => return ControlFlow::Return(Value::Null),
                 };
 
                 if obj.is_native_class() && prop.is_string() {
                     let prop = prop.to_string();
                     let native = obj.get_native_class().unwrap();
-                    return Value::InternalFunction((prop, native.clone()));
+                    return ControlFlow::Return(Value::InternalFunction((prop, native.clone())));
                 }
                 if let Value::Error(err) = obj {
                     let err_value = err.clone().borrow().clone();
@@ -900,11 +1155,14 @@ impl Interpreter {
                 match (&obj, &prop) {
                     (Value::Object(obj), Value::String(prop)) => {
                         let prop = prop.get_value();
-                        let msg = format!(
-                            "Property {prop} not found {}",
-                            env.borrow().get_vars_name_value()
-                        );
-                        obj.borrow().get_prop(&prop).expect(&msg)
+                        let msg =
+                            format!("Property '{prop}' not  in found '{}'", object.to_string());
+                        let prop = obj.borrow().get_prop(&prop);
+                        if prop.is_none() {
+                            return ControlFlow::new_error(env, msg);
+                        }
+                        let prop = prop.unwrap();
+                        return ControlFlow::Return(prop);
                     }
                     (Value::Instance(instance), Value::String(prop)) => {
                         let class_name = instance.borrow().class.name.clone();
@@ -913,7 +1171,21 @@ impl Interpreter {
 
                         let value = instance.borrow().get(&prop.to_string());
 
-                        return value.expect(&msg);
+                        if value.is_none() {
+                            println!("Entrou aqui buscando: {prop}");
+                            let error = ControlFlow::new_error(env, msg);
+                            return error;
+                        }
+                        let value = value.unwrap();
+
+                        if value.is_function() {
+                            let func = value.to_function();
+
+                            let mut new_func = Function::from(func);
+                            new_func.this = obj;
+                            return ControlFlow::Return(Value::Function(new_func.into()));
+                        }
+                        return ControlFlow::Return(value);
                     }
                     (Value::Class(class), Value::String(prop)) => {
                         let class_name = &class.name;
@@ -921,15 +1193,19 @@ impl Interpreter {
                         let name = prop.to_string();
 
                         if let Some(val) = class.get_static_field(&name) {
-                            return val;
+                            return ControlFlow::Return(val);
                         }
                         if let Some(val) = class.find_static_method(&name) {
-                            return Value::Method(val);
+                            return ControlFlow::Return(Value::Function(val));
                         }
-                        panic!("{}", msg)
+
+                        return ControlFlow::new_error(env, format!("{}", msg).into());
                     }
                     (Value::InternalClass(native), Value::String(prop)) => {
-                        return Value::InternalFunction((prop.to_string(), native.clone()));
+                        return ControlFlow::Return(Value::InternalFunction((
+                            prop.to_string(),
+                            native.clone(),
+                        )));
                     }
                     (Value::Function(_func), Value::String(prop)) => {
                         let prop = prop.get_value();
@@ -938,19 +1214,36 @@ impl Interpreter {
                         todo!("A fazer {prop} {msg}");
                     }
                     _ => {
-                        panic!(
-                            "Cannot access property {:?} of {:?} (type: {:?}, {:?})",
-                            prop.to_string(),
-                            obj.to_string(),
-                            &prop.type_of(),
-                            &obj.type_of()
-                        )
+                        return ControlFlow::new_error(
+                            env,
+                            format!(
+                                "Cannot access property {:?} of {:?} (type: {:?}, {:?})",
+                                prop.to_string(),
+                                obj.to_string(),
+                                &prop.type_of(),
+                                &obj.type_of()
+                            )
+                            .into(),
+                        );
                     }
                 }
             }
             Expr::BracketAccess { object, property } => {
-                let obj = self.eval_expr(object, env.clone());
-                let prop = self.eval_expr(property, env.clone());
+                let obj = self.eval_expr(object, env);
+
+                if obj.is_error() {
+                    return obj;
+                }
+
+                let obj = obj.unwrap();
+
+                let prop = self.eval_expr(property, env);
+
+                if prop.is_error() {
+                    return prop;
+                }
+
+                let prop = prop.unwrap();
 
                 match (&obj, &prop) {
                     (Value::Object(obj), Value::String(prop)) => {
@@ -976,13 +1269,24 @@ impl Interpreter {
                             .map(|ch| Value::String(ch.to_string().into()))
                             .unwrap_or(Value::Null)
                     }
-                    _ => panic!(
-                        "Cannot access property {:?} of {:?} (type: {:?}, {:?})",
-                        prop.to_string(),
-                        obj.to_string(),
-                        &obj.type_of(),
-                        &prop.type_of()
-                    ),
+                    (Value::Object(obj), prop) => {
+                        let prop = prop.to_string();
+                        // let msg = format!("Property {prop} not found");
+                        obj.borrow().get_prop(&prop).unwrap_or(Value::Null)
+                    }
+                    _ => {
+                        return ControlFlow::new_error(
+                            env,
+                            format!(
+                                "Cannot access property {:?} of {:?} (type: {:?}, {:?})",
+                                prop.to_string(),
+                                obj.to_string(),
+                                &obj.type_of(),
+                                &prop.type_of()
+                            )
+                            .into(),
+                        )
+                    }
                 }
             }
             Expr::SetProperty {
@@ -994,12 +1298,20 @@ impl Interpreter {
                     Expr::Identifier(name) => Value::String(name.to_string().into()),
                     Expr::Literal(Literal::Number(n)) => Value::Number(n.into()),
                     Expr::Literal(Literal::String(s)) => Value::String(s.clone().into()),
-                    _ => return Value::Null,
+                    _ => return ControlFlow::Return(Value::Null),
                 };
 
-                let obj = self.eval_expr(object, env.clone());
+                let obj = self.eval_expr(object, env);
+                if obj.is_error() {
+                    return obj;
+                }
+                let obj = obj.unwrap();
 
-                let val = self.eval_expr(value, env.clone());
+                let val = self.eval_expr(value, env);
+                if val.is_error() {
+                    return val;
+                }
+                let val = val.unwrap();
 
                 match (obj.clone(), &prop) {
                     (Value::Object(obj), Value::String(prop)) => {
@@ -1030,15 +1342,21 @@ impl Interpreter {
                             .get(&prop.to_string())
                             .unwrap_or(Value::Null);
                     }
-                    _ => panic!(
-                        "Cannot access property {:?} of {:?} (type: {:?}, {:?})",
-                        prop.to_string(),
-                        obj.to_string(),
-                        &obj.type_of(),
-                        &prop.type_of()
-                    ),
+                    _ => {
+                        return ControlFlow::new_error(
+                            env,
+                            format!(
+                                "Cannot access property {:?} of {:?} (type: {:?}, {:?})",
+                                prop.to_string(),
+                                obj.to_string(),
+                                &obj.type_of(),
+                                &prop.type_of()
+                            )
+                            .into(),
+                        )
+                    }
                 }
-                Value::Void
+                return ControlFlow::None;
             }
             Expr::New { class_expr } => {
                 let empty_args: Vec<Expr> = vec![];
@@ -1049,32 +1367,45 @@ impl Interpreter {
                         let callee = Expr::Identifier(name.clone());
                         (&Box::new(callee), &empty_args)
                     }
-                    _ => panic!("Expected a call expression after 'new'"),
+                    _ => {
+                        return ControlFlow::new_error(
+                            env,
+                            format!("Expected a call expression after 'new'"),
+                        )
+                    }
                 };
 
+                let mut arg_values = vec![];
+
                 // Avalia os argumentos
-                let arg_values: Vec<_> = args
-                    .iter()
-                    .map(|arg| self.eval_expr(arg, env.clone()))
-                    .collect();
+                for arg in args.iter() {
+                    let val = self.eval_expr(arg, env);
+                    if val.is_error() {
+                        return val;
+                    }
+                    let mut val = val.unwrap();
+                    if val.is_void() {
+                        val = Value::Null;
+                    }
+                    arg_values.push(val);
+                }
 
                 // Avalia o callee (pode ser Identifier, MemberAccess, etc.)
-                let value = self.eval_expr(class_callee, env.clone());
+                let value = self.eval_expr(class_callee, env);
 
+                if value.is_error() {
+                    return value;
+                }
+                let value = value.unwrap();
                 match value {
                     Value::Class(class) => {
-                        let mut interpreter = self.clone();
-                        let closure = class.closure.clone();
-                        // println!("Instanciando: {}", &class.name);
-                        interpreter.env = closure;
-                        let instance = Class::instantiate(&class, arg_values, interpreter);
-
+                        let instance = Class::instantiate(&class, arg_values);
                         return instance;
                     }
                     Value::InternalClass(native) => {
                         let instance = native.borrow_mut().instantiate(arg_values).unwrap();
 
-                        return instance;
+                        return ControlFlow::Return(instance);
                     }
                     _ => Value::Error(Rc::new(RefCell::new(value))),
                 }
@@ -1089,21 +1420,30 @@ impl Interpreter {
             }
         };
 
-        ret
+        ControlFlow::Return(ret)
     }
 
-    pub fn eval_stmt(&mut self, stmt: &Stmt, env: Rc<RefCell<Environment>>) -> ControlFlow<Value> {
+    pub fn eval_stmt(
+        &mut self,
+        stmt: &Stmt,
+        env: &mut Rc<RefCell<Environment>>,
+    ) -> ControlFlow<Value> {
         match stmt {
             Stmt::Let { name, value } => {
                 let name = name.clone();
                 if env.borrow().exist(&name) {
-                    panic!("Cannot redeclare block-scoped variable '{}'", name);
+                    return ControlFlow::new_error(
+                        env,
+                        format!("Cannot redeclare block-scoped variable '{}'", name),
+                    );
                 }
-                let expr = value.clone().unwrap_or(Expr::Literal(Literal::Null));
-                let val = self.eval_expr(&expr, env.clone());
-                if val.is_error() {
-                    return ControlFlow::Error(val);
+                let expr = value.clone();
+                let val = self.eval_expr(&expr, env);
+                if !val.is_return() {
+                    return val;
                 }
+                let val = val.unwrap();
+
                 env.borrow_mut().define(name, val);
                 ControlFlow::None
             }
@@ -1113,62 +1453,84 @@ impl Interpreter {
                 vararg,
                 body,
             }) => {
-                let mut function = Function {
-                    name: name.clone(),
-                    params: params.clone(),
-                    vararg: vararg.clone(),
-                    body: body.clone(),
-                    environment: Environment::new_rc_enclosed(env.clone()),
-                    prototype: None,
-                };
-                let _ = function.generate_proto();
+                let func_env = Environment::new_rc_enclosed(env);
+                let function = Function::new(
+                    name.clone(),
+                    params.clone(),
+                    vararg.clone(),
+                    body.clone(),
+                    func_env,
+                    vec![],
+                );
 
                 env.borrow_mut()
                     .define(name.clone(), Value::Function(function.into()));
                 ControlFlow::None
             }
             Stmt::Return(expr) => {
-                let val = self.eval_expr(&expr.clone().unwrap(), env.clone());
-                ControlFlow::Return(val)
+                if expr.is_none() {
+                    return ControlFlow::Return(Value::Void);
+                }
+                let val = self.eval_expr(&expr.clone().unwrap(), env);
+                if val.is_error() {
+                    return val;
+                }
+                ControlFlow::Return(val.unwrap())
             }
-            Stmt::ExprStmt(expr) => match self.eval_expr(expr, env) {
-                Value::Error(err) => ControlFlow::Error(err.borrow().clone()),
-                _ => ControlFlow::None,
-            },
+            Stmt::ExprStmt(expr) => {
+                let eval = self.eval_expr(expr, env);
+
+                eval
+            }
             Stmt::If {
                 condition,
                 then_branch,
                 else_ifs,
                 else_branch,
             } => {
-                if self.eval_expr(condition, env.clone()).to_bool() {
+                let condition = self.eval_expr(condition, env);
+                if condition.is_error() {
+                    return condition;
+                }
+                let condition = condition.unwrap();
+                if condition.to_bool() {
+                    let mut local_env = Rc::new(RefCell::new(Environment::new_enclosed(env)));
+
                     for stmt in then_branch {
-                        let local_env =
-                            Rc::new(RefCell::new(Environment::new_enclosed(env.clone())));
-                        match self.eval_stmt(stmt, local_env) {
+                        match self.eval_stmt(stmt, &mut local_env) {
                             ControlFlow::None => {}
                             other => return other,
                         }
                     }
                 } else {
                     for (cond, branch) in else_ifs {
-                        if self.eval_expr(cond, env.clone()).to_bool() {
+                        let conditon = self.eval_expr(cond, env);
+                        if conditon.is_error() {
+                            return conditon;
+                        }
+                        let conditon = conditon.unwrap();
+
+                        if conditon.to_bool() {
+                            let mut local_env =
+                                Rc::new(RefCell::new(Environment::new_enclosed(env)));
                             if let Some(branch) = branch {
                                 for stmt in branch {
-                                    let local_env = Rc::new(RefCell::new(
-                                        Environment::new_enclosed(env.clone()),
-                                    ));
-                                    return self.eval_stmt(&stmt, local_env);
+                                    match self.eval_stmt(&stmt, &mut local_env) {
+                                        ControlFlow::None => {}
+                                        other => return other,
+                                    };
                                 }
                             }
                             return ControlFlow::None;
                         }
                     }
                     if let Some(else_branch) = else_branch {
+                        let mut local_env = Rc::new(RefCell::new(Environment::new_enclosed(env)));
                         for stmt in else_branch {
-                            let local_env =
-                                Rc::new(RefCell::new(Environment::new_enclosed(env.clone())));
-                            return self.eval_stmt(&stmt, local_env);
+                            match self.eval_stmt(&stmt, &mut local_env) {
+                                ControlFlow::None => {}
+                                other => return other,
+                            };
                         }
                     }
                 }
@@ -1182,15 +1544,24 @@ impl Interpreter {
                 update,
                 body,
             } => {
-                let loop_env = Environment::new_rc_enclosed(env.clone());
-                self.eval_stmt(init, loop_env.clone());
+                let mut loop_env = Environment::new_rc_enclosed(env);
+                self.eval_stmt(init, &mut loop_env);
 
                 loop {
                     let cond = match condition {
-                        Some(cond) => match self.eval_expr(cond, loop_env.clone()) {
-                            Value::Bool(b) => b,
-                            _ => panic!("Expected boolean {:?}", cond),
-                        },
+                        Some(cond) => {
+                            let condition = self.eval_expr(cond, &mut loop_env);
+                            if condition.is_error() {
+                                return condition;
+                            }
+
+                            let condition = condition.unwrap();
+
+                            match condition {
+                                Value::Bool(b) => b,
+                                _ => panic!("Expected boolean {:?}", cond),
+                            }
+                        }
                         None => true,
                     };
 
@@ -1198,22 +1569,14 @@ impl Interpreter {
                         break;
                     }
 
-                    let inner = Rc::new(RefCell::new(Environment::new_enclosed(loop_env.clone())));
+                    let inner = Rc::new(RefCell::new(Environment::new_enclosed(&mut loop_env)));
 
-                    for stmt in body {
-                        match self.eval_stmt(stmt, inner.clone()) {
-                            ControlFlow::Return(v) => return ControlFlow::Return(v),
-                            ControlFlow::Break => return ControlFlow::None,
-                            ControlFlow::Continue => break,
-                            ControlFlow::None => {}
-                            ControlFlow::Error(err) => {
-                                panic!("{:?}", err);
-                            }
-                        }
+                    if let Some(value) = self.loop_block(body, inner) {
+                        return value;
                     }
 
                     if let Some(update) = update {
-                        self.eval_expr(update, loop_env.clone());
+                        self.eval_expr(update, &mut loop_env);
                     }
                 }
 
@@ -1224,9 +1587,14 @@ impl Interpreter {
                 iterable,
                 body,
             } => {
-                let iterable_val = self.eval_expr(iterable, env.clone());
+                let iterable_val = self.eval_expr(iterable, env);
 
-                let loop_env = Environment::new_rc_enclosed(env);
+                if iterable_val.is_error() {
+                    return iterable_val;
+                }
+                let iterable_val = iterable_val.unwrap();
+
+                let mut loop_env = Environment::new_rc_enclosed(env);
 
                 let iter: Box<dyn Iterator<Item = Value>> = match iterable_val {
                     Value::Array(arr) => Box::new(arr.get_value().borrow().clone().into_iter()),
@@ -1242,23 +1610,14 @@ impl Interpreter {
                 };
 
                 for val in iter {
-                    let inner_env = Rc::new(RefCell::new(Environment::new_enclosed(Rc::clone(
-                        &loop_env,
-                    ))));
+                    let mut inner_env =
+                        Rc::new(RefCell::new(Environment::new_enclosed(&mut loop_env)));
 
                     // Aplicar o padrão de atribuição (identificador ou destructuring)
-                    self.destructure(&target, val, inner_env.clone());
+                    self.destructure(&target, val, &mut inner_env);
 
-                    for stmt in body.iter() {
-                        match self.eval_stmt(stmt, inner_env.clone()) {
-                            ControlFlow::Return(v) => return ControlFlow::Return(v),
-                            ControlFlow::Break => return ControlFlow::None,
-                            ControlFlow::Continue => break,
-                            ControlFlow::None => {}
-                            ControlFlow::Error(err) => {
-                                panic!("{:?}", err);
-                            }
-                        }
+                    if let Some(value) = self.loop_block(body, inner_env) {
+                        return value;
                     }
                 }
 
@@ -1269,9 +1628,14 @@ impl Interpreter {
                 object,
                 body,
             } => {
-                let object_val = self.eval_expr(object, env.clone());
+                let object_val = self.eval_expr(object, env);
 
-                let loop_env = Environment::new_rc_enclosed(env);
+                if object_val.is_error() {
+                    return object_val;
+                }
+                let object_val = object_val.unwrap();
+
+                let mut loop_env = Environment::new_rc_enclosed(env);
 
                 let iter: Box<dyn Iterator<Item = Value>> = match object_val {
                     Value::Object(obj) => {
@@ -1302,23 +1666,14 @@ impl Interpreter {
                 };
 
                 for val in iter {
-                    let inner_env = Rc::new(RefCell::new(Environment::new_enclosed(Rc::clone(
-                        &loop_env,
-                    ))));
+                    let mut inner_env =
+                        Rc::new(RefCell::new(Environment::new_enclosed(&mut loop_env)));
 
                     // Aplicar o padrão de atribuição (identificador ou destructuring)
-                    self.destructure(&target, val, inner_env.clone());
+                    self.destructure(&target, val, &mut inner_env);
 
-                    for stmt in body.iter() {
-                        match self.eval_stmt(stmt, inner_env.clone()) {
-                            ControlFlow::Return(v) => return ControlFlow::Return(v),
-                            ControlFlow::Break => return ControlFlow::None,
-                            ControlFlow::Continue => break,
-                            ControlFlow::None => {}
-                            ControlFlow::Error(err) => {
-                                panic!("{:?}", err);
-                            }
-                        }
+                    if let Some(value) = self.loop_block(body, inner_env) {
+                        return value;
                     }
                 }
 
@@ -1332,13 +1687,18 @@ impl Interpreter {
                 instance_fields,
             } => {
                 // Primeiro definimos a classe com valor `null` para permitir referências recursivas
-                // env.borrow_mut().define(name.clone(), Value::Null);
+                env.borrow_mut().define(name.clone(), Value::Null);
 
-                let class_env = Environment::new_rc_enclosed(Rc::clone(&env));
+                let mut class_env = Environment::new_rc_enclosed(env);
+                let class_closure = class_env.clone();
 
                 // Herdar de outra classe, se houver
                 let super_class_value = if let Some(expr) = superclass {
-                    let val = self.eval_expr(expr, Rc::clone(&class_env));
+                    let val = self.eval_expr(expr, &mut class_env);
+                    if val.is_error() {
+                        return val;
+                    }
+                    let val = val.unwrap();
                     match val {
                         Value::Class(class) => Some(class),
                         _ => panic!("Superclass must be a class"),
@@ -1350,7 +1710,6 @@ impl Interpreter {
                 let instance_variables = Rc::new(RefCell::new(HashMap::new()));
 
                 let instace_env = Environment::new_rc();
-                let static_method_env: Rc<RefCell<Environment>> = Environment::new_rc();
 
                 let mut super_class_static_methods = vec![];
                 let mut super_class_methods = vec![];
@@ -1359,16 +1718,15 @@ impl Interpreter {
                     let super_class = super_class_value.clone().unwrap();
 
                     for method in super_class.static_methods.clone() {
-                        let method = Method::new(
+                        let method = Function::new(
                             method.name.clone(),
                             method.params.clone(),
                             method.vararg.clone(),
                             method.body.clone(),
-                            Rc::clone(&static_method_env),
-                            method.modifiers.clone(),
-                            name.clone(),
                             env.clone(),
+                            method.modifiers.clone(),
                         );
+
                         super_class_static_methods.push(Rc::new(method));
                     }
                     for method in super_class.methods.clone() {
@@ -1377,15 +1735,13 @@ impl Interpreter {
                         if method_name == "constructor" {
                             method_name = "super".to_owned();
                         }
-                        let method = Method::new(
+                        let method = Function::new(
                             method_name,
                             method.params.clone(),
                             method.vararg.clone(),
                             method.body.clone(),
-                            Rc::clone(&instace_env),
+                            class_closure.clone(),
                             method.modifiers.clone(),
-                            name.clone(),
-                            env.clone(),
                         );
 
                         super_class_methods.push(Rc::new(method));
@@ -1404,16 +1760,24 @@ impl Interpreter {
                 let mut static_variables = HashMap::new();
                 // // Avaliar e definir campos estáticos no ambiente da classe
                 for (field_name, initializer) in static_fields {
-                    let value = self.eval_expr(initializer, Rc::clone(&class_env));
+                    let value = self.eval_expr(initializer, &mut class_env);
+
+                    if value.is_error() {
+                        return value;
+                    }
+                    let value = value.unwrap();
                     static_variables.insert(field_name.to_owned(), value.clone());
-                    static_method_env
-                        .borrow_mut()
-                        .define(field_name.to_string(), value);
                 }
 
                 // Avaliar valores iniciais dos campos de instância (armazenados para uso em `instantiate`)
                 for (field_name, initializer) in instance_fields {
-                    let value = self.eval_expr(initializer, Rc::clone(&class_env));
+                    let value = self.eval_expr(initializer, &mut class_env);
+
+                    if value.is_error() {
+                        return value;
+                    }
+                    let value = value.unwrap();
+
                     instance_variables
                         .borrow_mut()
                         .insert(field_name.to_owned(), value.clone());
@@ -1423,21 +1787,20 @@ impl Interpreter {
                 }
 
                 let mut is_constructor_declared = false;
-                let mut method_array: Vec<Rc<Method>> = vec![];
-                let mut static_method_array: Vec<Rc<Method>> = vec![];
+                let mut method_array: Vec<Rc<Function>> = vec![];
+                let mut static_method_array: Vec<Rc<Function>> = vec![];
+
                 for method in methods {
                     let method_name = method.name.clone();
 
                     if method.modifiers.contains_str("static") {
-                        let method = Method::new(
+                        let method = Function::new(
                             method.name.clone(),
                             method.params.clone(),
                             method.vararg.clone(),
                             method.body.clone(),
-                            Rc::clone(&static_method_env),
-                            method.modifiers.clone(),
-                            name.clone(),
                             env.clone(),
+                            method.modifiers.clone(),
                         );
 
                         static_method_array.push(Rc::new(method))
@@ -1449,15 +1812,13 @@ impl Interpreter {
                             is_constructor_declared = true;
                         }
 
-                        let method = Method::new(
+                        let method = Function::new(
                             method_name,
                             method.params.clone(),
                             method.vararg.clone(),
                             method.body.clone(),
-                            instace_env.clone(),
-                            method.modifiers.clone(),
-                            name.clone(),
                             env.clone(),
+                            method.modifiers.clone(),
                         );
                         method_array.push(Rc::new(method));
                     }
@@ -1472,6 +1833,7 @@ impl Interpreter {
                 // add super statics to static_method_array
                 static_method_array.extend(super_class_static_methods);
                 method_array.extend(super_class_methods);
+
                 let class = Class {
                     name: name.clone(),
                     superclass: super_class,
@@ -1482,28 +1844,25 @@ impl Interpreter {
                     this: Rc::clone(&instace_env),
                     instance_variables,
                     static_variables,
-                    closure: env.clone(),
+                    closure: class_closure.clone(),
                 };
 
-                // self.classes.insert(name.clone(), class.clone());
                 env.borrow_mut()
-                    .define(name.clone(), Value::Class(Rc::new(class)));
+                    .define(name.clone(), Value::Class(class.into()));
 
-                // ControlFlow::Return(Value::Class(Rc::new(class)))
                 ControlFlow::None
             }
             Stmt::Export(inner) => {
-                self.eval_stmt(inner, env.clone());
+                self.eval_stmt(inner, env);
 
                 // Registra o símbolo exportado, se aplicável
                 if let Some(name) = self.get_export_name(inner) {
-                    // println!("Exporting {:?}", name);
                     self.register_export(&name);
                 }
                 ControlFlow::None
             }
             Stmt::ExportDefault(expr) => {
-                let value = self.eval_stmt(&expr, env.clone());
+                let value = self.eval_stmt(&expr, env);
                 let value = value.unwrap().clone();
                 env.borrow_mut()
                     .define("default".to_string(), value.clone());
@@ -1572,12 +1931,18 @@ impl Interpreter {
                 ControlFlow::None
             }
             Stmt::While { condition, body } => {
-                let loop_env = Environment::new_rc_enclosed(env);
+                let mut loop_env = Environment::new_rc_enclosed(env);
 
-                while self.eval_expr(condition, Rc::clone(&loop_env)).is_truthy() {
+                let condition = self.eval_expr(condition, &mut loop_env);
+                if condition.is_error() {
+                    return condition;
+                }
+                let condition = condition.unwrap();
+
+                while condition.is_truthy() {
                     // let loop_env = Rc::clone(&loop_env);
                     for stmt in body.iter() {
-                        match self.eval_stmt(stmt, Rc::clone(&loop_env)) {
+                        match self.eval_stmt(stmt, &mut loop_env) {
                             ControlFlow::Return(v) => return ControlFlow::Return(v),
                             ControlFlow::Break => return ControlFlow::None,
                             ControlFlow::Continue => break,
@@ -1596,16 +1961,38 @@ impl Interpreter {
                 catch_block,
                 finally_block,
             } => {
+                let mut try_env = Environment::new_rc_enclosed(env);
                 // Tenta executar o bloco `try`
-                let result = self.execute_block(try_block, env.clone());
+                let result = self.execute_try_block(try_block, &mut try_env);
+
+                let mut catch_env = Environment::new_rc_enclosed(env);
 
                 if let Err(error) = result {
                     // Se houve erro e temos um bloco catch
                     if let Some((err_name, catch_stmts)) = catch_block {
-                        let catch_env = Environment::new_rc_enclosed(env.clone());
                         let error = Value::Error(Rc::new(RefCell::new(error)));
                         catch_env.borrow_mut().define(err_name.to_string(), error);
-                        let _ = self.execute_block(catch_stmts, catch_env);
+
+                        for stmt in catch_stmts {
+                            let val = self.eval_stmt(stmt, &mut catch_env);
+                            match val {
+                                ControlFlow::Return(val) => return ControlFlow::Return(val),
+                                ControlFlow::Break => {
+                                    return ControlFlow::new_error(
+                                        env,
+                                        format!("Break not allowed catch block").into(),
+                                    )
+                                }
+                                ControlFlow::Continue => {
+                                    return ControlFlow::new_error(
+                                        env,
+                                        format!("Continue not allowed catch block ").into(),
+                                    )
+                                }
+                                ControlFlow::None => {}
+                                error => return error,
+                            }
+                        }
                     } else {
                         // Sem catch, propaga o erro depois do finally
                         if let Some(finally_stmts) = finally_block {
@@ -1624,8 +2011,15 @@ impl Interpreter {
                 ControlFlow::None
             }
             Stmt::Throw(expr) => {
-                let value = self.eval_expr(expr, env.clone());
-                ControlFlow::Error(value)
+                let value = self.eval_expr(expr, env);
+                let error = value.as_error();
+                if let Some(error) = error {
+                    let error_val = error.unwrap_err();
+
+                    return ControlFlow::Error(error_val);
+                } else {
+                    return ControlFlow::new_error(env, "Throw must be an error".into());
+                }
             }
             _ => {
                 todo!()
@@ -1633,13 +2027,48 @@ impl Interpreter {
         }
     }
 
+    fn loop_block(
+        &mut self,
+        body: &Vec<Stmt>,
+        mut inner: Rc<RefCell<Environment>>,
+    ) -> Option<ControlFlow<Value>> {
+        for stmt in body {
+            match (&stmt, self.eval_stmt(stmt, &mut inner)) {
+                (Stmt::Break, ControlFlow::Break) => return Some(ControlFlow::None),
+                (Stmt::Continue, ControlFlow::Continue) => break,
+                (_, ControlFlow::Error(err)) => {
+                    return Some(ControlFlow::Error(err));
+                }
+                (Stmt::Return(_), ControlFlow::Return(v)) => {
+                    return Some(ControlFlow::Return(v));
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    pub fn execute_try_block(
+        &mut self,
+        stmts: &Vec<Stmt>,
+        env: &mut Rc<RefCell<Environment>>,
+    ) -> Result<Value, Value> {
+        for stmt in stmts {
+            let val = self.eval_stmt(stmt, env);
+            match val {
+                ControlFlow::Error(err) => return Err(err),
+                _ => {}
+            }
+        }
+        Ok(Value::Void)
+    }
     pub fn execute_block(
         &mut self,
         stmts: &Vec<Stmt>,
-        env: Rc<RefCell<Environment>>,
+        env: &mut Rc<RefCell<Environment>>,
     ) -> Result<Value, Value> {
         for stmt in stmts {
-            let val = self.eval_stmt(stmt, Rc::clone(&env));
+            let val = self.eval_stmt(stmt, env);
             // println!("Executando {:?} {:?}", stmt, val);
             match val {
                 ControlFlow::Return(val) => return Ok(val),
@@ -1663,11 +2092,11 @@ impl Interpreter {
         let tokens = self.tokenize(source, path.to_string());
         let ast = Parser::new(tokens).parse();
 
-        let module_env = Environment::new_rc();
+        let mut module_env = Environment::new_rc();
         self.exported_symbols.clear();
 
         for stmt in ast {
-            self.eval_stmt(&stmt, module_env.clone());
+            self.eval_stmt(&stmt, &mut module_env);
         }
 
         // println!("Env: {:?}",module_env.borrow_mut().get_vars_name_value());
@@ -1703,7 +2132,11 @@ impl Interpreter {
             right: Box::new(right),
         };
     }
-    fn resolve_variable(&self, name: &str, env: Rc<RefCell<Environment>>) -> Result<Value, String> {
+    fn resolve_variable(
+        &self,
+        name: &str,
+        env: &mut Rc<RefCell<Environment>>,
+    ) -> Result<Value, String> {
         // 1. tenta no ambiente atual (local)
         if let Some(val) = env.borrow().get(name) {
             return Ok(val);
@@ -1713,7 +2146,7 @@ impl Interpreter {
         Err(format!("Undefined variable '{}'.", name))
     }
 
-    fn destructure(&self, pattern: &Expr, value: Value, env: Rc<RefCell<Environment>>) {
+    fn destructure(&self, pattern: &Expr, value: Value, env: &mut Rc<RefCell<Environment>>) {
         match pattern {
             Expr::Identifier(name) => {
                 env.borrow_mut().define(name.clone(), value);
@@ -1725,7 +2158,7 @@ impl Interpreter {
                 };
                 for (i, pat) in patterns.iter().enumerate() {
                     if let Some(v) = val_arr.get_value().borrow().get(i) {
-                        self.destructure(pat, v.clone(), env.clone());
+                        self.destructure(pat, v.clone(), env);
                     }
                 }
             }
@@ -1739,15 +2172,13 @@ impl Interpreter {
                     match entry {
                         ObjectEntry::Property { key, value } => {
                             let val = val_obj.borrow().get_prop(key).unwrap_or(Value::Null);
-                            self.destructure(value, val, env.clone());
+                            self.destructure(value, val, env);
                         }
                         ObjectEntry::Shorthand(name) => {
                             let val = val_obj.borrow().get_prop(name).unwrap_or(Value::Null);
-                            self.destructure(&Expr::Identifier(name.clone()), val, env.clone());
+                            self.destructure(&Expr::Identifier(name.clone()), val, env);
                         }
                         ObjectEntry::Spread(_) => {
-                            // Ignore here — spread in destructuring is handled via Pattern::Rest
-                            // If reached, this is likely a misuse.
                             panic!("Unexpected spread in object literal during destructuring");
                         }
                     }
