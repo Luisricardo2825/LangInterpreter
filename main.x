@@ -1,32 +1,16 @@
-class Num {
-    value;
-    constructor(self, value) {
-        self.value = value;
+let array = [1, 2, 3, 4];
+let count = 0;
+for (let i = 0; true; i++) {
+    if (i >= 10) {
+        Io.println("é maior que", i);
+        break;
     }
-    valueOf(self) {
-        return self.value;
-    }
-    toString(self) {
-        return self.value;
-    }
+
+    Io.println("Valor de i:", i);
 }
 
-function treatArgs(...args) {
-    for (let arg of args) {
-        if (arg instanceof String) {
-            Io.println(typeof arg, arg, "é String");
-        } else if (arg instanceof Number) {
-            Io.println(typeof arg, arg, "é Number");
-        } else if (arg instanceof Num) {
-            Io.println(typeof arg, arg, "é Num");
-        } else if (arg instanceof Array) {
-            Io.println(typeof arg, arg, "é Array");
-        } else {
-            Io.println(arg, "é deconhecido");
-        }
-    }
+try {
+    throw new Error("TesteExc", "Teste de erro");
+} catch (e) {
+    Io.println("Ocorreu um error", e);
 }
-let num1 = new Num(10);
-
-// let n = new Teste("Ricardo", 10);
-treatArgs("a", "b", "c", 1, 2, 3, num1, [1, 2, 3]);

@@ -418,12 +418,8 @@ impl<T: std::fmt::Debug + std::convert::From<std::string::String> + From<Value> 
         let error = throw_method.call(vec![Value::Null, Value::String(msg.into())]);
 
         if error.is_err() {
-            panic!(
-                "Error creating error object {:?}",
-                error.unwrap().to_string()
-            );
+            panic!("Error creating error object {:?}", error.to_string());
         }
-        let error = error.unwrap();
         ControlFlow::Error(error.into())
     }
     pub fn is_none(&self) -> bool {
@@ -447,6 +443,14 @@ impl<T: std::fmt::Debug + std::convert::From<std::string::String> + From<Value> 
         matches!(self, ControlFlow::Error(_))
     }
 
+    pub fn is_break(&self) -> bool {
+        matches!(self, ControlFlow::Break)
+    }
+
+    pub fn is_continue(&self) -> bool {
+        matches!(self, ControlFlow::Continue)
+    }
+
     pub fn err(self) -> Option<T> {
         match self {
             ControlFlow::Error(msg) => Some(msg.into()),
@@ -463,6 +467,7 @@ impl<T: std::fmt::Debug + std::convert::From<std::string::String> + From<Value> 
             + &std::line!().to_string();
         match self {
             ControlFlow::Return(value) => value,
+            ControlFlow::Error(value) => value,
             other => panic!("Cannot unwrap {other:?} {location}"),
         }
     }

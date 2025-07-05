@@ -146,25 +146,32 @@ function getYear(timestamp) {
 }
 export class Date {
     time = now();
-    constructor(time) {
+    constructor(self, time) {
         if (time != null) {
-            this.time = time;
+            self.time = time;
         }
     }
     static now() {
         return now();
     }
-    getDayOfMonth() {
-        return getDayOfMonth(this.time);
+    getDayOfMonth(self) {
+        return getDayOfMonth(self.time);
     }
-    getMonth() {
-        return getMonth(this.time);
+    getMonth(self) {
+        return getMonth(self.time);
     }
-    getYear() {
-        return getYear(this.time);
+    getYear(self) {
+        return getYear(self.time);
     }
 
-    toString() {
-        return this.getDayOfMonth() + "/" + this.getMonth() + "/" + this.getYear();
+    valueOf(self){
+        return self.toString()
+    }
+    toString(self) {
+        return self.getDayOfMonth() + "/" + self.getMonth() + "/" + self.getYear();
     }
 }
+
+let dataAtual = new Date();
+
+Io.println(dataAtual);

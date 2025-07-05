@@ -9,7 +9,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 use serde::{Deserialize, Serialize};
 use values::Value;
 
-use crate::{ast::ast::ControlFlow, environment::values::NativeObjectTrait};
+use crate::environment::values::NativeObjectTrait;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Environment {
@@ -30,30 +30,6 @@ fn global() -> Vec<(String, Value)> {
             _ => Value::Null,
         }),
     ));
-
-    env.set_prop(
-        "forOf",
-        Value::Builtin(|args: Vec<Value>| match &args[..] {
-            [Value::Array(array), Value::Function(func)] => {
-                let mut ret = Value::Void;
-                for value in array.get_value().borrow().iter() {
-                    let result = func.call(vec![value.clone()]);
-                    match result {
-                        ControlFlow::Break => break,
-                        ControlFlow::Continue => continue,
-                        ControlFlow::None => {}
-                        ControlFlow::Error(err) => {
-                            return err;
-                        }
-                        ControlFlow::Return(val) => ret = val,
-                    };
-                }
-                ret
-            }
-            _ => Value::Null,
-        }),
-    )
-    .unwrap();
 
     env.push((
         "range".to_string(),

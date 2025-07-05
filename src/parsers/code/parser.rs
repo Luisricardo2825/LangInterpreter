@@ -60,7 +60,7 @@ impl Parser {
     fn parse_throw_stmt(&mut self) -> Option<Stmt> {
         self.expect_keyword("throw");
         let expr = self.parse_expr()?;
-        self.expect(&Token::Semicolon);
+        self.consume(&Token::Semicolon);
         Some(Stmt::Throw(expr))
     }
 

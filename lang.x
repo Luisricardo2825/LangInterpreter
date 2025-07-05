@@ -70,7 +70,10 @@ class Str {
                 }
             }
 
-            result = result + self.value[i];
+            if (self.value[i] != null) {
+                result = result + self.value[i];
+            }
+
             i = i + 1;
         }
 
@@ -116,5 +119,7 @@ class Str {
 let a = new Str("Olá");
 let b = Str.factory("mundo");
 let c = a + " " + b;
-Io.println((c + " TESTEEEEE").asas());
+
+Io.println(c.toString());
+
 Io.println(c.replace("mundo", "ricardo").toString());

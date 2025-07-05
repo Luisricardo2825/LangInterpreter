@@ -66,8 +66,6 @@ impl NativeIoClass {
                     let value_of_method = value_of_method.unwrap().unwrap();
                     let value = value_of_method.call(vec![val.clone()]);
                     if !value.is_err() {
-                        let value = value.unwrap();
-
                         return self.format_primitive_with_color(&value);
                     }
                 }

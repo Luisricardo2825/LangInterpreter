@@ -315,7 +315,7 @@ impl Class {
         vars
     }
 
-    pub fn instantiate(class: &Rc<Class>, mut args: Vec<Value>) -> ControlFlow<Value> {
+    pub fn instantiate(class: &Rc<Class>, mut args: Vec<Value>) -> Value {
         let this = Environment::new_rc();
         // let closure = interpreter.env.clone();
         this.borrow_mut().copy_from(class.this.clone());
@@ -364,7 +364,7 @@ impl Class {
             return call;
         }
 
-        ControlFlow::Return(value)
+        value
     }
 
     pub fn find_method(&self, name: &str) -> Option<Rc<Function>> {
@@ -620,7 +620,7 @@ impl Function {
         body
     }
 
-    pub fn call(&self, mut args: Vec<Value>) -> ControlFlow<Value> {
+    pub fn call(&self, mut args: Vec<Value>) -> Value {
         let name = &self.name;
         let body = &self.body;
         let mut interpreter = Interpreter::new_empty();
@@ -670,35 +670,32 @@ impl Function {
         for stmt in body {
             match interpreter.eval_stmt(stmt, &mut local_env) {
                 ControlFlow::Return(val) => {
-                    if val.is_void() {
-                        return ControlFlow::None;
-                    }
-                    return ControlFlow::Return(val);
+                    return val;
                 }
                 ControlFlow::Break => {
-                    return ControlFlow::new_error(
+                    return Value::new_error(
                         &mut local_env,
                         format!("Break not allowed in function {}", name).into(),
                     )
                 }
                 ControlFlow::Continue => {
-                    return ControlFlow::new_error(
+                    return Value::new_error(
                         &mut local_env,
                         format!("Continue not allowed in function {}", name).into(),
                     )
                 }
                 ControlFlow::None => {}
                 ControlFlow::Error(err) => {
-                    return ControlFlow::Error(err);
+                    return err;
                 }
             }
         }
 
         if is_initializer {
-            return ControlFlow::Return(this);
+            return this;
         }
 
-        ControlFlow::None
+        Value::Void
     }
 
     pub fn is_static(&self) -> bool {
@@ -712,7 +709,47 @@ impl Function {
     }
 }
 impl Value {
+    #[track_caller]
+    pub fn new_error(env: &mut Rc<RefCell<Environment>>, msg: String) -> Value {
+        let location = std::panic::Location::caller().to_string()
+            + " "
+            + std::file!()
+            + ":"
+            + &std::line!().to_string();
+        let env = env.borrow();
+        let error_class = env.get("Error");
+        if error_class.is_none() {
+            panic!("Error class not found {msg} {location}")
+        }
+        let error_class = error_class.unwrap().to_class();
+        if error_class.is_none() {
+            panic!("Class 'Error' not found");
+        }
+        let error_class = error_class.unwrap();
+
+        let throw_method = error_class.find_static_method("throw");
+
+        if throw_method.is_none() {
+            panic!("throw method not found");
+        }
+        let throw_method = throw_method.unwrap();
+
+        let error = throw_method.call(vec![Value::Null, Value::String(msg.into())]);
+
+        if error.is_error() {
+            panic!("Error creating error object {:?}", error.to_string());
+        }
+        Value::Error(Rc::new(error.into()))
+    }
+
     pub fn is_error(&self) -> bool {
+        match self {
+            Value::Error(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_err(&self) -> bool {
         match self {
             Value::Error(_) => true,
             _ => false,
@@ -810,8 +847,7 @@ impl Value {
             if let Some(method) = plus_method {
                 let args = vec![Value::Instance(instance), other.clone()];
                 let val = method.call(args);
-                if !val.is_err() {
-                    let val = val.unwrap();
+                if !val.is_error() {
                     return val;
                 }
             }
@@ -857,10 +893,9 @@ impl Value {
                 if method.is_some() {
                     let method = method.unwrap();
                     let value = method.call(vec![]);
-                    if value.is_err() {
+                    if value.is_error() {
                         return false;
                     }
-                    let value = value.unwrap();
                     value.is_number()
                 } else {
                     false
@@ -989,10 +1024,9 @@ impl Value {
                     let method = method.clone();
 
                     let call = method.call(vec![self.clone()]);
-                    if call.is_err() {
-                        return call.err().unwrap().to_string();
-                    }
-                    let call = call.unwrap();
+                    // if call.is_err() {
+                    //     return call.to_string();
+                    // }
                     return call.to_string();
                 }
 
@@ -1129,7 +1163,6 @@ impl Value {
                     if call.is_err() {
                         return f64::NAN;
                     }
-                    let call = call.unwrap();
                     call.to_number()
                 } else {
                     f64::NAN
