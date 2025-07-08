@@ -38,4 +38,4 @@ macro_rules! declare_modules {
 }
 
 // Use:
-declare_modules!(fs, io, json, math, array, number, string);
+declare_modules!(fs, io, json, math, array, number);

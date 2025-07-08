@@ -10,9 +10,7 @@ use crate::{
 };
 
 use super::{
-    native::native_callable::NativeCallable,
-    stdlib::{array::NativeArrayClass, string::NativeStringClass},
-    Environment,
+    native::native_callable::NativeCallable, stdlib::array::NativeArrayClass, Environment,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -21,7 +19,7 @@ pub enum Value<T = String> {
     Null,                      // Primitivo
     Bool(bool),                // Primitivo
     Number(NativeNumberClass), // Primitivo
-    String(NativeStringClass), // Primitivo
+    String(String),            // Primitivo
 
     Array(NativeArrayClass),
     Object(Rc<RefCell<Vec<(String, Value)>>>),
@@ -74,14 +72,14 @@ impl RuntimeError {
 
 impl From<std::string::String> for Value {
     fn from(value: std::string::String) -> Self {
-        Value::String(NativeStringClass::new_with_value(value))
+        Value::String(value)
     }
 }
 
 impl From<Value> for String {
     fn from(value: Value) -> Self {
         match value {
-            Value::String(s) => s.get_value(),
+            Value::String(s) => s,
             _ => panic!("Cannot convert {:?} to String", value),
         }
     }
@@ -179,11 +177,7 @@ impl From<serde_json::Value> for Value {
             serde_json::Value::Null => Value::Null,
             serde_json::Value::Bool(b) => Value::Bool(b),
             serde_json::Value::Number(n) => Value::Number(n.as_f64().unwrap().into()),
-            serde_json::Value::String(s) => {
-                Value::String(NativeStringClass::new_with_args(vec![Value::String(
-                    s.into(),
-                )]))
-            }
+            serde_json::Value::String(s) => Value::String(s.into()),
             serde_json::Value::Array(a) => Value::Array(
                 Rc::new(RefCell::new(a.into_iter().map(|v| v.into()).collect())).into(),
             ),
@@ -263,6 +257,29 @@ impl Instance {
             return method;
         }
         method
+    }
+
+    pub fn is_instance_of(&self, class: &Value) -> bool {
+        let inst = self;
+        let mut current = Some(&inst.class);
+
+        while let Some(cls) = current {
+            let class = class.to_class();
+            if class.is_none() {
+                return false;
+            }
+            let class = class.unwrap();
+            if Rc::ptr_eq(cls, &class) {
+                return true;
+            }
+
+            current = match &cls.superclass {
+                Some(super_class) => Some(&super_class),
+                None => None,
+            };
+        }
+
+        false
     }
 }
 
@@ -486,25 +503,7 @@ impl Class {
             }
             Value::Instance(instance) => {
                 let inst = instance.borrow();
-                let mut current = Some(&inst.class);
-
-                while let Some(cls) = current {
-                    let class = class.to_class();
-                    if class.is_none() {
-                        return false;
-                    }
-                    let class = class.unwrap();
-                    if Rc::ptr_eq(cls, &class) {
-                        return true;
-                    }
-
-                    current = match &cls.superclass {
-                        Some(super_class) => Some(&super_class),
-                        None => None,
-                    };
-                }
-
-                false
+                inst.is_instance_of(class)
             }
             Value::Builtin(_) => todo!(),
             Value::InternalClass(_ref_cell) => todo!(),
@@ -670,7 +669,10 @@ impl Function {
         for stmt in body {
             match interpreter.eval_stmt(stmt, &mut local_env) {
                 ControlFlow::Return(val) => {
-                    return val;
+                    if matches!(stmt, &Stmt::Return(_)) {
+                        // Somente caso seja um return
+                        return val;
+                    }
                 }
                 ControlFlow::Break => {
                     return Value::new_error(
@@ -812,7 +814,6 @@ impl Value {
         match self {
             Value::InternalClass(_) => true,
             Value::Array(_) => true,
-            Value::String(_) => true,
             _ => false,
         }
     }
@@ -821,7 +822,7 @@ impl Value {
         match self {
             Value::InternalClass(n) => Some(n.clone()),
             Value::Array(a) => Some(Rc::new(RefCell::new(a.clone()))),
-            Value::String(s) => Some(Rc::new(RefCell::new(s.clone()))),
+            // Value::String(s) => Some(Rc::new(RefCell::new(s.clone()))),
             // Value::Number(n) => Some(Rc::new(RefCell::new(n.clone()))),
             _ => None,
         }
@@ -1003,7 +1004,7 @@ impl Value {
             Value::Null => "null".to_string(),
             Value::Bool(b) => b.to_string(),
             Value::Number(n) => n.to_string(),
-            Value::String(s) => s.get_value().clone(),
+            Value::String(s) => s.clone(),
             Value::Array(a) => {
                 let mut s = "[".to_string();
                 for (i, v) in a.get_value().borrow().iter().enumerate() {
@@ -1145,7 +1146,7 @@ impl Value {
         match self {
             Value::Number(n) => n.get_value(),
             Value::String(s) => {
-                let s = s.get_value();
+                let s = s;
                 s.parse::<f64>().unwrap_or(f64::NAN)
             }
             Value::Bool(b) => {
@@ -1213,6 +1214,36 @@ impl Value {
         match self {
             Value::Instance(instance) => instance.clone(),
             _ => panic!("Cannot convert {} to instance", self.type_of()),
+        }
+    }
+
+    pub fn get_primitive_class(&self, env: &mut Rc<RefCell<Environment>>) -> Option<Value> {
+        match self {
+            Value::Bool(_) => {
+                let class = env.borrow().get("Boolean");
+                if class.is_none() {
+                    return None;
+                }
+                let class = class.unwrap().to_class().unwrap();
+                Some(Class::instantiate(&class, vec![self.clone()]))
+            }
+            Value::Number(_) => {
+                let class = env.borrow().get("Number");
+                if class.is_none() {
+                    return None;
+                }
+                let class = class.unwrap().to_class().unwrap();
+                Some(Class::instantiate(&class, vec![self.clone()]))
+            }
+            Value::String(_) => {
+                let class = env.borrow().get("String");
+                if class.is_none() {
+                    return None;
+                }
+                let class = class.unwrap().to_class().unwrap();
+                Some(Class::instantiate(&class, vec![self.clone()]))
+            }
+            _ => None,
         }
     }
 }

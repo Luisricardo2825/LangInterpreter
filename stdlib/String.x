@@ -1,4 +1,4 @@
-class Str {
+class String extends Collection {
     value = null;
     length = 0;
     constructor(self, value) {
@@ -7,7 +7,7 @@ class Str {
     }
 
     static factory(nome) {
-        return new Str(nome);
+        return new String(nome);
     }
 
     charAt(self, index) {
@@ -16,13 +16,15 @@ class Str {
                 return self.value[i];
             }
         }
+
+        return null;
     }
 
     concat(self, str) {
-        if (!(str instanceof Str)) {
-            str = new Str(str);
+        if (!(str instanceof String)) {
+            str = new String(str);
         }
-        return new Str(self.value + str.value);
+        return new String(self.value + str.value);
     }
 
     @Operator // Marca como operador para a operação "+"(add)
@@ -39,15 +41,15 @@ class Str {
                 result += self.value[i];
             }
         }
-        return new Str(result);
+        return new String(result);
     }
     replace(self, searchValue, replaceValue) {
         let result = "";
 
         let found = false;
 
-        searchValue = new Str(searchValue);
-        replaceValue = new Str(replaceValue);
+        searchValue = new String(searchValue);
+        replaceValue = new String(replaceValue);
 
         for (let i = 0; i < self.length; {}) {
             if (!found && self.value[i] == searchValue.value[0]) {
@@ -77,11 +79,11 @@ class Str {
             i = i + 1;
         }
 
-        return new Str(result);
+        return new String(result);
     }
 
     static factory(value) {
-        return new Str(value);
+        return new String(value);
     }
     indexOf(self, str) {
         // find index of str using a for-loop
@@ -112,14 +114,33 @@ class Str {
     }
 
     valueOf(self) {
-        return self.value + " Esse é o valueOF";
+        return self.value;
+    }
+
+    chars(self) {
+        let chars = [];
+        for (let i = 0; i < self.length; i++) {
+            chars.push(self.value[i]);
+        }
+        return chars;
+    }
+
+    iter(self) {
+        return self.chars();
+    }
+    enumerate(self) {
+        let chars = [];
+        for (let i = 0; i < self.length; i++) {
+            chars.push([i, self.value[i]]);
+        }
+        return chars;
+    }
+
+    repeat(self, count) {
+        let result = "";
+        for (let i = 0; i < count; i++) {
+            result += self.value;
+        }
+        return new String(result);
     }
 }
-
-let a = new Str("Olá");
-let b = Str.factory("mundo");
-let c = a + " " + b;
-
-Io.println(c.toString());
-
-Io.println(c.replace("mundo", "ricardo").toString());

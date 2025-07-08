@@ -1,35 +1,35 @@
-export class Number {
+class Number {
     value = null;
     constructor(value) {
         this.value = value;
     }
 
-    static hello(){
-        Io.println("Olá")
+    static hello() {
+        Io.println("Olá");
     }
-    
-    plus(other){
+
+    plus(other) {
         return new Number(this.value + other);
     }
 
-    operator plus(other) {
+    @Operator plus(other) {
         return new Number(this.value + other);
     }
-    operator sub(other) {
+    @Operator sub(other) {
         return new Number(this.value - other);
     }
-    operator mul(other) {
+    @Operator mul(other) {
         return new Number(this.value * other);
     }
 
-    operator div(other) {
+    @Operator div(other) {
         return new Number(this.value / other);
     }
-    
-    operator mod(other) {
+
+    @Operator mod(other) {
         return new Number(this.value % other);
     }
-    
+
     valueOf() {
         return this.value;
     }

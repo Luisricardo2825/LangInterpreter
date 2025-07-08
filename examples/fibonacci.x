@@ -12,4 +12,5 @@ function fibonacci(n) {
     return a;
 }
 
+
 console.log(fibonacci(100)); // 6

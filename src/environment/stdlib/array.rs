@@ -149,7 +149,7 @@ impl NativeCallable for NativeArrayClass {
                         format!("Expected a String, got {}", args[0].type_of()).into(),
                     );
                 };
-                let sep = sep.get_value();
+                let sep = sep;
                 let joined = self
                     .get_value()
                     .borrow()

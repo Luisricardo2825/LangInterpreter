@@ -25,7 +25,7 @@ fn global() -> Vec<(String, Value)> {
     env.push((
         "len".to_string(),
         Value::Builtin(|args: Vec<Value>| match &args[..] {
-            [Value::String(s)] => Value::Number(s.len().into()),
+            [Value::String(s)] => Value::Number(s.chars().count().into()),
             [Value::Array(a)] => Value::Number(a.get_value().borrow().len().into()),
             _ => Value::Null,
         }),
@@ -146,16 +146,16 @@ impl Environment {
         self.variables.clear();
     }
 
-    const RESERVED: &[&str] = &["String", "Boolean", "Array", "Object", "Function"];
+    // const RESERVED: &[&str] = &["String", "Boolean", "Array", "Object", "Function"];
 
-    fn is_reserved(name: &str) -> bool {
-        Self::RESERVED.contains(&name)
-    }
+    // fn is_reserved(name: &str) -> bool {
+    //     Self::RESERVED.contains(&name)
+    // }
 
     pub fn define(&mut self, name: String, value: Value) {
-        if Environment::is_reserved(&name) {
-            panic!("Cannot define reserved word '{}'", name);
-        }
+        // if Environment::is_reserved(&name) {
+        //     panic!("Cannot define reserved word '{}'", name);
+        // }
         match self.variables.iter_mut().find(|(n, _)| n == &name) {
             Some((_, v)) => *v = value,
             None => self.variables.push((name, value)),

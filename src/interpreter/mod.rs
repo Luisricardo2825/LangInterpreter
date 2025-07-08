@@ -112,20 +112,13 @@ impl Interpreter {
         let tokens = self.tokenize(src.clone(), filename.clone());
         let mut parser = Parser::new(tokens);
 
-        let error_class = ClassGenerator::create_error_class();
-
-        let error_stmt_json = serde_json::to_string(&error_class);
-        if error_stmt_json.is_err() {
-            panic!("Error creating error class");
-        }
-        let error_stmt_json = error_stmt_json.unwrap();
-
-        let error_class: Stmt = serde_json::from_str(&error_stmt_json).unwrap();
-        let default_classes = vec![error_class];
+        // let error_class = ClassGenerator::create_error_class();
+        let default_stdlib = self.load_stdlib();
+        // let default_classes = vec![error_class];
 
         let mut ast = vec![];
 
-        ast.extend(default_classes);
+        ast.extend(default_stdlib);
         ast.extend(parser.parse());
 
         // bench();
@@ -173,6 +166,36 @@ impl Interpreter {
             }
         }
         None
+    }
+
+    // function to read a entire dir and return Vec<Stmt> for each class
+    pub fn load_stdlib(&mut self) -> Vec<Stmt> {
+        let files = Self::get_files("stdlib");
+
+        let mut ast = vec![];
+
+        for filename in files {
+            let src = fs::read_to_string(&filename).unwrap_or(self.source.clone());
+
+            let tokens = self.tokenize(src.clone(), filename.clone());
+            let mut parser = Parser::new(tokens);
+
+            ast.extend(parser.parse());
+        }
+        return ast;
+    }
+
+    pub fn get_files(dir: &str) -> Vec<String> {
+        let mut files = Vec::new();
+        let entries = fs::read_dir(dir).unwrap();
+        for entry in entries {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.is_file() {
+                files.push(path.to_str().unwrap().to_string());
+            }
+        }
+        files
     }
 
     pub fn interpret(&mut self) -> Option<Value> {
@@ -1159,9 +1182,16 @@ impl Interpreter {
                     let err_value = err.clone().borrow().clone();
                     obj = err_value;
                 }
+
+                if obj.is_primitive() {
+                    let class = obj.get_primitive_class(env);
+                    if class.is_some() {
+                        obj = class.unwrap();
+                    }
+                }
+
                 match (&obj, &prop) {
                     (Value::Object(obj), Value::String(prop)) => {
-                        let prop = prop.get_value();
                         let msg =
                             format!("Property '{prop}' not  in found '{}'", object.to_string());
                         let prop = obj.borrow().get_prop(&prop);
@@ -1214,7 +1244,7 @@ impl Interpreter {
                         )));
                     }
                     (Value::Function(_func), Value::String(prop)) => {
-                        let prop = prop.get_value();
+                        let prop = prop;
 
                         let msg = format!("Property {prop} not found");
                         todo!("A fazer {prop} {msg}");
@@ -1223,7 +1253,7 @@ impl Interpreter {
                         return ControlFlow::new_error(
                             env,
                             format!(
-                                "Cannot access property {:?} of {:?} (type: {:?}, {:?})",
+                                "Cannot access property {:?} of {:?} (type: {:?}, {:?}) GetProperty",
                                 prop.to_string(),
                                 obj.to_string(),
                                 &prop.type_of(),
@@ -1277,16 +1307,32 @@ impl Interpreter {
                         // let msg = format!("Property {prop} not found");
                         obj.borrow().get_prop(&prop).unwrap_or(Value::Null)
                     }
+                    (Value::Instance(instance), Value::Number(index)) => {
+                        let collection_class = env.borrow().get("Collection");
+                        let collection_class = collection_class.unwrap();
+
+                        if !instance.borrow().is_instance_of(&collection_class) {
+                            return ControlFlow::new_error(env, "Not a collection".into());
+                        }
+                        let iter_method = instance.borrow().get("iter");
+
+                        let arr = iter_method.unwrap().to_method().call(vec![obj]);
+                        let index = index.get_value() as usize;
+                        arr.to_array()
+                            .get(index)
+                            .map(|ch| Value::String(ch.to_string().into()))
+                            .unwrap_or(Value::Null)
+                    }
                     _ => {
                         return ControlFlow::new_error(
                             env,
                             format!(
-                                "Cannot access property {:?} of {:?} (type: {:?}, {:?})",
-                                prop.to_string(),
-                                obj.to_string(),
-                                &obj.type_of(),
-                                &prop.type_of()
-                            )
+                            "Cannot access property {:?} of {:?} (type: {:?}, {:?}) BracketAccess",
+                            prop.to_string(),
+                            obj.to_string(),
+                            &obj.type_of(),
+                            &prop.type_of()
+                        )
                             .into(),
                         )
                     }
@@ -1349,12 +1395,12 @@ impl Interpreter {
                         return ControlFlow::new_error(
                             env,
                             format!(
-                                "Cannot access property {:?} of {:?} (type: {:?}, {:?})",
-                                prop.to_string(),
-                                obj.to_string(),
-                                &obj.type_of(),
-                                &prop.type_of()
-                            )
+                            "Cannot access property {:?} of {:?} (type: {:?}, {:?}) SetProperty",
+                            prop.to_string(),
+                            obj.to_string(),
+                            &obj.type_of(),
+                            &prop.type_of()
+                        )
                             .into(),
                         )
                     }
@@ -1480,6 +1526,7 @@ impl Interpreter {
                 val
             }
             Stmt::ExprStmt(expr) => {
+                // Não retorna valor pois não suporta REPL
                 let eval = self.eval_expr(expr, env);
 
                 eval
@@ -1600,7 +1647,7 @@ impl Interpreter {
 
                 let iterable_val = iterable_val.unwrap();
 
-                let iter: Box<dyn Iterator<Item = Value>> = match iterable_val {
+                let iter: Box<dyn Iterator<Item = Value>> = match &iterable_val {
                     Value::Array(arr) => Box::new(arr.get_value().borrow().clone().into_iter()),
                     Value::String(s) => {
                         let s = s.to_string();
@@ -1609,6 +1656,18 @@ impl Interpreter {
                             .map(|c| Value::String(c.to_string().into()))
                             .collect();
                         Box::new(chars.into_iter())
+                    }
+                    Value::Instance(instance) => {
+                        let collection_class = env.borrow().get("Collection");
+                        let collection_class = collection_class.unwrap();
+
+                        if !instance.borrow().is_instance_of(&collection_class) {
+                            return ControlFlow::new_error(env, "Not a collection".into());
+                        }
+                        let iter_method = instance.borrow().get("iter");
+
+                        let arr = iter_method.unwrap().to_method().call(vec![iterable_val]);
+                        Box::new(arr.to_array().into_iter())
                     }
                     _ => panic!("Expected array or string in for-of"),
                 };
@@ -1861,10 +1920,11 @@ impl Interpreter {
                     closure: class_closure.clone(),
                 };
 
-                env.borrow_mut()
-                    .define(name.clone(), Value::Class(class.into()));
+                let class = Value::Class(class.into());
+                env.borrow_mut().define(name.clone(), class.clone());
 
-                ControlFlow::None
+                ControlFlow::Return(class)
+                // ControlFlow::None
             }
             Stmt::Export(inner) => {
                 self.eval_stmt(inner, env);
@@ -2059,9 +2119,7 @@ impl Interpreter {
                 ControlFlow::Break => return ControlFlow::Break,
                 ControlFlow::Continue => break,
                 ControlFlow::Return(v) => {
-                    if matches!(stmt, &Stmt::Return(_)) {
-                        return ControlFlow::Return(v);
-                    }
+                    return ControlFlow::Return(v);
                 }
                 ControlFlow::Error(err) => return ControlFlow::Error(err),
                 ControlFlow::None => {}

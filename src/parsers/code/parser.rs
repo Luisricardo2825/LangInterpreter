@@ -100,7 +100,7 @@ impl Parser {
         if self.expect_keyword("export") {
             if self.expect_keyword("default") {
                 let value = self.parse_stmt()?;
-                self.expect(&Token::Semicolon);
+                self.consume(&Token::Semicolon);
                 return Some(Stmt::ExportDefault(Box::new(value)));
             }
 
@@ -212,7 +212,7 @@ impl Parser {
             _ => panic!("Expected string after 'from'"),
         };
 
-        self.expect(&Token::Semicolon);
+        self.consume(&Token::Semicolon);
 
         match (default_import, named_imports.is_empty()) {
             (Some(local), true) => Some(Stmt::ImportDefault {
