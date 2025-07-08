@@ -669,10 +669,7 @@ impl Function {
         for stmt in body {
             match interpreter.eval_stmt(stmt, &mut local_env) {
                 ControlFlow::Return(val) => {
-                    if matches!(stmt, &Stmt::Return(_)) {
-                        // Somente caso seja um return
-                        return val;
-                    }
+                    return val;
                 }
                 ControlFlow::Break => {
                     return Value::new_error(

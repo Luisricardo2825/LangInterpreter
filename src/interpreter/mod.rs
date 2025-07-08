@@ -1527,9 +1527,12 @@ impl Interpreter {
             }
             Stmt::ExprStmt(expr) => {
                 // Não retorna valor pois não suporta REPL
-                let eval = self.eval_expr(expr, env);
+                let result = self.eval_expr(expr, env);
 
-                eval
+                if result.is_err() {
+                    return result;
+                }
+                ControlFlow::None
             }
             Stmt::If {
                 condition,
